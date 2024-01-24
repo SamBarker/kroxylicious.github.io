@@ -8,10 +8,20 @@ layout: default
             <div class="card-title display-6 mx-2 mt-3 mb-4">Use Cases</div>
             <div class="row g-0">
                 <div class="col-auto">
-                  {% for use_case in site.use_cases %}
-                    <h2>{{ use_case.name }}</h2>
+                    <ol>
+                        {% for use_case in site.use_cases %}
+                        <li class="usecase-toc-list-class"><a href="#{{ use_case.name }}">{{ use_case.name }}</a></li>
+                        {% endfor %}
+                    </ol>
+                </div>
+            </div>
+            <hr/>
+            <div class="row g-0">
+                <div class="col-auto">
+                    {% for use_case in site.use_cases %}
+                    <h2 id="{{ use_case.name }}">{{ use_case.name }}</h2>
                     <p>{{ use_case.content | markdownify }}</p>
-                  {% endfor %}
+                    {% endfor %}
                 </div>
             </div>
         </div>
