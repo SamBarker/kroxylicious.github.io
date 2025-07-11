@@ -83,3 +83,10 @@ asciidoctor:
     toc: preamble
     source-highlighter: rouge
     sectanchors: ''
+
+defaults:
+  - scope:
+      type: pages
+      path: /redirects
+    values:
+      layout: redirect.html

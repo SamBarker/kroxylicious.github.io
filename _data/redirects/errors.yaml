@@ -1,0 +1,11 @@
+baseUrl: https://kroxylicious.io/documentation/
+mappings:
+- name: suspectedTls
+  fromVersion: 0.13.0
+  path: /html/kroxylicious-proxy/#con-configuring-client-connections-proxy
+
+- name: test
+  fromVersion: 0.10.0
+  path: /html/kroxylicious-proxy/#con-configuring-client-connections-proxy
+
+
