@@ -30,20 +30,11 @@ module SamplePlugin
         @name     = basename + ext # basically @basename + @ext.
         @layout  = 'redirect.html'
 
-        @content = "#{redirectConfig['baseUrl']}#{mapping['path']}"
-
-        # Initialize data hash with a key pointing to all posts under current category.
-        # This allows accessing the list in a template via `page.linked_docs`.
         @data = {
-          'version' => mapping['fromVersion'],
-          'target' => redirectConfig['baseUrl'] + mapping['path'],
+          'target' => redirectConfig['baseUrl'] + mapping['fromVersion'] + mapping['path'],
+          'layout' => 'redirect'
         }
 
-        # # Look up front matter defaults scoped to type `categories`, if given key
-        # # doesn't exist in the `data` hash.
-        data.default_proc = proc do |_, key|
-          site.frontmatter_defaults.find(relative_path, type, key)
-        end
         Jekyll.logger.info "generated redirect page #{@dir}#{@basename}"
     end
 
