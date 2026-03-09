@@ -39,6 +39,27 @@ jobs:
           CONTAINER_ENGINE: docker
           BUILD_IMAGE_SPEC: localhost:5000/kroxy-jekyll:latest
 
+      - name: Require post front matter date is not older than filename date
+        run: |
+          mismatches=()
+          for post in _posts/*.md; do
+            filename=$(basename "$post")
+            file_date=$(echo "$filename" | grep -oP '^\d{4}-\d{2}-\d{2}')
+            front_matter_date=$(grep -oP '^date:\s*\K\d{4}-\d{2}-\d{2}' "$post" || true)
+            if [[ -n "$file_date" && -n "$front_matter_date" && "$front_matter_date" < "$file_date" ]]; then
+              mismatches+=("$filename: filename date=$file_date, front matter date=$front_matter_date")
+            fi
+          done
+          if [[ ${#mismatches[@]} -gt 0 ]]; then
+            echo "Error: post front matter date is older than filename date:" >&2
+            for mismatch in "${mismatches[@]}"; do
+              echo "  $mismatch" >&2
+            done
+            exit 1
+          else
+            echo "Success: all post front matter dates are consistent with filename dates"
+          fi
+
       # Currently the image shas are not available when we create the release, they need to be manually
       # updated in the release PR before merge.
       - name: Require release manifests to contain non-placeholder container image SHAs

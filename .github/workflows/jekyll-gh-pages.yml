@@ -70,6 +70,36 @@ jobs:
           CONTAINER_ENGINE: docker
           CONFIG_OVERRIDES: _config-overrides.yml
           BUILD_IMAGE_SPEC: localhost:5000/kroxy-jekyll:latest
+      - name: Warn about future-dated posts
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          future_posts=()
+          for post in _posts/*.md; do
+            filename=$(basename "$post")
+            file_date=$(echo "$filename" | grep -oP '^\d{4}-\d{2}-\d{2}')
+            # Extract the full front matter date value (may include time and timezone offset)
+            # and convert to a UTC date so that e.g. "2026-03-05 00:00:00 +1300" is
+            # correctly treated as 2026-03-04 in UTC (matching Jekyll's behaviour).
+            front_matter_raw=$(grep -oP '^date:\s*\K.+' "$post" | xargs 2>/dev/null || true)
+            if [[ -n "$front_matter_raw" ]]; then
+              post_date=$(date -u -d "$front_matter_raw" +%Y-%m-%d 2>/dev/null || echo "$file_date")
+            else
+              post_date="$file_date"
+            fi
+            if [[ -n "$post_date" && "$post_date" > "$today" ]]; then
+              future_posts+=("$filename (publishes $post_date)")
+            fi
+          done
+          if [[ ${#future_posts[@]} -gt 0 ]]; then
+            echo "## ⚠️ Future-dated posts detected" >> "$GITHUB_STEP_SUMMARY"
+            echo "The following posts will not appear until the site is rebuilt on or after their publish date:" >> "$GITHUB_STEP_SUMMARY"
+            for post in "${future_posts[@]}"; do
+              echo "- $post" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Re-run this workflow manually on the publish date to make them live." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload artifact
         # Automatically uploads an artifact from the './_site' directory by default
         uses: actions/upload-pages-artifact@v3
