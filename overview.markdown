@@ -66,5 +66,10 @@ Kroxylicious is careful to decode only the Kafka RPCs that the filters actually 
 interested in a particular RPC, its bytes will pass straight through Kroxylicious.  This approach helps keep Kroxylicious
 fast.
 
-The actual performance overhead of using Kroxylicious depends on the particular use-case.
+The actual performance overhead of using Kroxylicious depends on the particular use-case. As a guide:
+
+- **Passthrough proxy (no filters)**: ~0.2 ms additional average publish latency, no throughput impact
+- **Record encryption (AES-256-GCM)**: ~26% throughput reduction per partition; 15–40 ms additional p99 latency at sub-saturation rates
+
+See the [performance reference page]({{ '/performance/' | absolute_url }}) for full benchmark results, methodology, and sizing guidance.
 
