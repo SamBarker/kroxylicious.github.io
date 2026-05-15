@@ -103,7 +103,11 @@ The flamegraphs below are fully interactive: hover over a frame to see its name 
 | Kroxylicious proxy | 1.4% |
 | GC | 0.1% |
 
-The proxy is overwhelmingly I/O-bound. 59% of CPU is in `send`/`recv` syscalls — the inherent cost of maintaining two TCP connections (client→proxy, proxy→Kafka) with data flowing through the JVM. The proxy itself accounts for 1.4%. It really is a TCP relay with protocol awareness.
+The proxy is overwhelmingly I/O-bound. 59% of CPU is in `send`/`recv` syscalls — the inherent cost of maintaining two TCP connections (client→proxy, proxy→Kafka) with data flowing through the JVM. The proxy itself accounts for 1.4% — and understanding *why* that number is so small is the interesting part.
+
+Kroxylicious decodes Kafka RPCs selectively: each filter declares which API keys it cares about, and the proxy only deserialises messages that at least one filter needs. Even in the no-filter scenario, the default infrastructure filters are doing genuine L7 work — broker address rewriting, API version negotiation, topic name caching — which means metadata, FindCoordinator, and API version exchanges are fully decoded. But the high-volume produce and consume traffic? The decode predicate skips full deserialisation for those entirely, passing them through at close to L4 speed.
+
+The 1.4% is the cost of a proxy that is *selectively* L7: doing real Kafka protocol work where it matters, and treating the hot path like a TCP relay where it doesn't. That's not a side-effect — it's what the decode predicate design is for, and this flamegraph validates it.
 
 ### Encryption proxy (same 36,000 msg/sec rate)
 
@@ -209,16 +213,6 @@ During the 4-producer rate sweep, we noticed that JFR recordings and flamegraphs
 **Bug 3 — wrong guard variable**: The async-profiler restart was guarded by checking `AGENT_LIB` (the path to the native library). `AGENT_LIB` is always set when the library exists on the image — even when profiling was intentionally skipped on clusters where the `Unconfined` seccomp profile couldn't be applied. The correct guard is `ASYNC_PROFILER_FLAGS`, which is only set when the seccomp patch was successfully applied.
 
 Spotting these required noticing that two different probe flamegraphs were pixel-for-pixel identical, then working back through the restart logic. The lesson: when reusing a deployed cluster across multiple probes, validate that diagnostic collection is actually running fresh for each one.
-
-## The cluster that wouldn't upgrade
-
-Midway through a benchmark campaign, the Fyre OpenShift cluster got stuck mid-upgrade. All 3 worker nodes were `SchedulingDisabled`, meaning benchmark pods couldn't schedule, meaning cluster operators (image-registry, ingress, monitoring, storage) went degraded, which blocked the upgrade from completing.
-
-The root cause was a MachineConfigOperator bug. Each worker's MachineConfigDaemon had finished its upgrade and set `desiredDrain=uncordon-...` — signalling it was ready to be uncordoned — but the MCO never acted on that signal. Workers sat cordoned indefinitely.
-
-Fix: `kubectl uncordon worker0 worker1 worker2`. Once uncordoned, pods scheduled, operators recovered, and the upgrade completed.
-
-Not a Kroxylicious bug, but it cost several hours of cluster recovery time during an active benchmark campaign. Worth knowing about if you're running OCP on Fyre.
 
 ## Run it yourself
 
