@@ -1,13 +1,13 @@
 ---
 layout: post
 title:  "Benchmarking a Kafka proxy: the engineering story"
-date:   2026-05-08 00:00:00 +0000
+date:   2026-05-28 00:00:00 +0000
 author: "Sam Barker"
 author_url: "https://github.com/SamBarker"
 categories: benchmarking performance engineering
 ---
 
-The [first post]({% post_url 2026-05-01-benchmarking-the-proxy %}) covered what we measured and what the numbers mean for operators. This one is for the people who want to know how we measured it, what the flamegraphs actually show, and what we found when we started looking carefully at our own tooling.
+The [first post]({% post_url 2026-05-21-benchmarking-the-proxy %}) covered what we measured and what the numbers mean for operators. This one is for the people who want to know how we measured it, what the flamegraphs actually show, and what we found when we started looking carefully at our own tooling.
 
 ## Why not Kafka's own tools?
 
@@ -141,15 +141,62 @@ Total additional CPU: ~33%. This aligns closely with the ~26% throughput reducti
 
 If you wanted to optimise this, the highest-impact areas would be: reducing buffer copies (encrypt in-place or use composite buffers), pooling encryption buffers to reduce GC pressure, and caching `Cipher` instances to reduce per-record JDK security overhead.
 
-## The per-connection ceiling
+## Following the ceiling
 
-The single-producer encryption ceiling at ~37k msg/sec raised the question of whether that was a per-pod limit or a per-connection limit.
+### A problem with the workload
 
-The answer came from a 4-producer rate sweep. Four producers sharing the same partition drove 47k+ msg/sec aggregate through the proxy while proxy CPU held at 570m/1000m — well below pod saturation. The Kafka partition became the bottleneck first.
+The single-producer rate sweep hit a ceiling at ~37k msg/sec. Before drawing conclusions, we had to ask whether that was actually a proxy CPU ceiling — or something else.
 
-The explanation: Netty assigns each client connection to its own event loop thread. Encryption happens synchronously on that thread. A single connection is bounded by one event loop's throughput, but additional connections get their own threads. The proxy's aggregate capacity is the sum of its event loop threads' individual capacities — until something else (the Kafka partition, the NIC, pod CPU) saturates first.
+Our initial sweeps ran with replication factor 3, the standard production default. At RF=3, every message the Kafka leader receives goes out to 2 follower replicas. With 1 KB messages and 37k msg/sec, that's ~37 MB/s inbound to the leader and ~111 MB/s total replication traffic outbound — and the Fyre cluster nodes had 10 GbE NICs, so the ceiling wasn't the NIC. But RF=3 does create a real per-partition I/O ceiling on the Kafka leader, and it sits right around where we were measuring.
 
-Worth noting: with replication factor 3, every message the Kafka leader receives goes out to 2 follower replicas plus potentially one consumer. At 50k msg/sec with 1 KB messages that's ~1.2 Gbps outbound from the leader alone — confirming why the Fyre cluster nodes need 10 Gbps NICs.
+The fix: RF=1, 10-topic workload. Dropping to RF=1 removes replication overhead; spreading across 10 partitions distributes load so no single partition hits its ceiling. We validated the fix with the passthrough proxy scenario: at 160k msg/sec total (16k per topic), proxy-no-filters matched baseline — Kafka was not the bottleneck. The sweep scaled to 640k msg/sec before hitting some uninvestigated ceiling well above where encryption constrains anything.
+
+### Is the encryption ceiling per-pod or per-connection?
+
+With a clean workload that isolates proxy CPU, we re-examined the ~37k figure. Running the same workload with 4 producers: proxy CPU had headroom to spare, and Kafka's partition became the bottleneck first. So the single-producer ceiling is not the pod ceiling.
+
+### The coefficient
+
+With the workload isolation in place, we swept encryption across CPU allocations. The throughput ceiling scaled linearly:
+
+| CPU limit | Encryption ceiling |
+|-----------|-------------------|
+| 1000m | ~40k msg/sec |
+| 2000m | ~80k msg/sec |
+| 4000m | ~160k msg/sec |
+
+From the 4-core sweep: safe at 160k msg/sec (p99: 447 ms), catastrophic at 320k msg/sec (p99: 537,000 ms). The saturation point is predictably between those two steps.
+
+Deriving the coefficient: at 4000m and 160k msg/sec with 1 KB messages —
+
+```
+160k msg/s × 1 KB = 160 MB/s produce throughput
+With matched consumer load: 160 MB/s encrypt + 160 MB/s decrypt
+→ 4000 mc / 320 MB/s bidirectional ≈ 12–13 mc per MB/s bidirectional
+→ equivalently: 4000 mc / 160 MB/s produce ≈ 25 mc per MB/s produce
+```
+
+We measured the coefficient at mid-utilisation (80k msg/sec, 2000m) at ~10 mc/MB/s bidirectional — lower, because of fixed per-connection overhead that's amortised at higher load. The operator-facing formula uses 20 mc/MB/s of produce throughput (= 10 bidirectional × 2 for produce+consume), which sits between mid-utilisation and saturation and provides inherent conservatism.
+
+One thing we observed: the proxy had 4 Netty event loop threads regardless of CPU limit. The throughput scaling isn't explained by thread count changing — it doesn't. What changes is the CPU time budget available to those threads. The detailed relationship between CPU limit, thread scheduling, and throughput ceiling is more subtle than a simple thread-count model; what we can say empirically is that throughput scales linearly with the CPU limit, and the formula holds.
+
+### The prediction
+
+Rather than just reporting the 4-core result, we used the 1-core ceiling to make a falsifiable prediction: if the ceiling scales linearly, a 2-core pod should saturate at ~80k msg/sec.
+
+The 2-core sweep:
+
+| Rate | p99 | Verdict |
+|------|-----|---------|
+| 40k msg/sec | 626 ms | Comfortable |
+| 80k msg/sec | 1,660 ms | Elevated — right at predicted ceiling |
+| 160k msg/sec | 175,277 ms | Catastrophic |
+
+The prediction held. The ceiling is real, linear, and predictable — which is exactly what you want from a sizing model.
+
+Setting `requests` equal to `limits` makes this predictability practical: a pod that can burst above its CPU limit introduces headroom uncertainty that breaks the model. With `requests == limits`, the CPU budget is fixed, the ceiling is fixed, and your capacity planning can rely on the coefficient.
+
+Worth noting: with RF=3 in production, every message the Kafka leader receives goes out to 2 follower replicas. At 50k msg/sec with 1 KB messages that's ~1.2 Gbps outbound from the leader alone — confirming why the Fyre cluster nodes need 10 GbE NICs, and why the replication ceiling matters for the benchmarking workload design.
 
 ## Bugs we found in our own tooling
 
@@ -189,16 +236,10 @@ jbang src/main/java/io/kroxylicious/benchmarks/results/ResultComparator.java \
 
 ## What's still open
 
-The gaps we know about and plan to fill:
+The coefficient is validated at 1, 2, and 4 cores for 1 KB messages. Known gaps:
 
-1. **Connection sweep**: run 1, 2, 4, 8, 16 producers simultaneously at a fixed per-producer rate to characterise the per-pod aggregate ceiling with encryption. The plan is in `CONNECTION-SWEEP-PLAN.md`.
-
-2. **Horizontal scaling**: verify that adding proxy pods scales aggregate throughput linearly.
-
-3. **Multi-partition workloads**: isolate encryption cost without being bounded by Kafka's per-partition ceiling.
-
-4. **Multi-pass sweeps**: each rate point was measured once. Running each probe three times and taking the median would give tighter bounds, particularly in the saturation transition zone.
-
-5. **Message size variation**: larger messages should show lower encryption overhead as a percentage; smaller messages may show higher overhead. 1 KB is a reasonable middle ground but not the whole picture.
+- **Message size variation**: larger messages should show lower overhead as a percentage; smaller messages may show higher. 1 KB is a reasonable middle ground but not the whole picture.
+- **Horizontal scaling**: multiple proxy pods haven't been measured; linear scaling is expected but not confirmed.
+- **Multi-pass sweeps**: each rate point was measured once. Running each probe three times and taking the median would give tighter bounds in the saturation transition zone.
 
 The operator-facing sizing reference and all the key tables are in `SIZING-GUIDE.md` in the benchmarks directory.

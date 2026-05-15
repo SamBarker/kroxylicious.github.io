@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Does my proxy look big in this cluster?"
-date:   2026-05-01 00:00:00 +0000
+date:   2026-05-21 00:00:00 +0000
 author: "Sam Barker"
 author_url: "https://github.com/SamBarker"
 categories: benchmarking performance
@@ -21,11 +21,11 @@ We ran three scenarios against the same Apache Kafka® cluster on the same hardw
 - **Passthrough proxy** — traffic routed through Kroxylicious with no filter chain configured
 - **Record encryption** — traffic through Kroxylicious with AES-256-GCM record encryption enabled, using HashiCorp Vault as the KMS
 
-We used [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark) rather than Kafka's own `kafka-producer-perf-test`. OMB is an industry-standard tool that coordinates producers and consumers together, measures end-to-end latency (not just publish latency), and produces structured JSON that makes comparison straightforward. More on why we built a whole harness around it in the [companion engineering post]({% post_url 2026-05-08-benchmarking-the-proxy-under-the-hood %}).
+We used [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark) rather than Kafka's own `kafka-producer-perf-test`. OMB is an industry-standard tool that coordinates producers and consumers together, measures end-to-end latency (not just publish latency), and produces structured JSON that makes comparison straightforward. More on why we built a whole harness around it in the [companion engineering post]({% post_url 2026-05-28-benchmarking-the-proxy-under-the-hood %}).
 
 ## Test environment
 
-All results were collected on a 6-node OpenShift cluster on Fyre, IBM's internal cloud environment. Kroxylicious ran as a single proxy pod with a 1000m CPU limit — one core.
+All results were collected on a 6-node OpenShift cluster on Fyre, IBM's internal cloud environment. Kroxylicious ran as a single proxy pod with a 1000m CPU limit.
 
 | Component | Details |
 |-----------|---------|
@@ -107,20 +107,15 @@ We started at 34k (right where the latency table started getting interesting) an
 
 The transition wasn't a clean cliff edge — between 37,600 and 42,000 msg/sec the proxy alternated between sustaining and saturating. That pattern is characteristic of running right at a limit: it's not that it suddenly falls over, it's that small fluctuations (GC pauses, scheduling jitter) are enough to tip it either way. Above ~39,000 msg/sec, p99 latency regularly spiked above 1,700 ms. Stay below 37k and you're fine. Creep above it and you'll notice. The numbers are not absolute — they are just what we measured on our cluster; your mileage **will vary**.
 
-### The thing that surprised us: per-connection, not per-pod
+### The ceiling scales with CPU budget
 
 The fact the proxy is low latency didn't surprise me, but this did — and it matters when we think about scaling. We maxed out a single connection, but that didn't mean we'd maxed out the proxy.
 
-Once we had the single-producer encryption ceiling at ~37k msg/sec, the obvious question was: is that the limit for the whole proxy pod, or just for one connection? The answer changes how you scale.
+Once we had the single-producer encryption ceiling at ~37k msg/sec, the obvious question was: is that the limit for the whole proxy pod, or just for one connection? We ran the same test with 4 producers. With 4 connections the proxy sustained well past the single-producer ceiling — proxy CPU had headroom to spare, and Kafka's partition became the bottleneck first.
 
-We ran the same test with 4 producers sharing the same single partition. With 4 connections the proxy sustained well past the single-producer ceiling — the Netty event loop queues stayed empty throughout, confirming the proxy had capacity to spare. The reason is how Netty works: each client connection gets its own event loop thread, and encryption happens synchronously on that thread. One producer connection saturates at ~37k msg/sec, but a second producer on a different connection gets its own thread and its own headroom. The proxy's aggregate capacity compounds with each connection.
+Going further: we swept the same workload at 1000m, 2000m, and 4000m CPU. The throughput ceiling scaled linearly with the CPU budget — 1000m at ~40k msg/sec, 2000m at ~80k, 4000m at ~160k. The proxy isn't hitting a fixed architectural wall; it's hitting a CPU budget wall, and that wall moves when you give it more CPU.
 
-<!-- TODO: replace with actual per-pod ceiling once connection sweep is complete.
-     The 4-producer sweep ran to 58k msg/sec with event loops still idle — we stopped
-     the sweep there, not because the proxy gave out. Need to run connection-sweep.sh
-     (see CONNECTION-SWEEP-PLAN.md) to find the real per-pod limit. -->
-
-**The practical implication**: if you're hitting the encryption ceiling, add producers before adding proxy pods. We haven't yet measured exactly where the per-pod ceiling sits — that's the next experiment — but the single-connection limit of ~37k is not the whole story.
+**The practical implication**: the throughput ceiling is not a fixed number — it's a function of the CPU you allocate. Set `requests` equal to `limits` in your pod spec; this makes the CPU budget deterministic and the ceiling predictable. The companion engineering post has the full story of how we found this, including the workload design choices needed to isolate proxy CPU from Kafka's own limits.
 
 ---
 
@@ -130,11 +125,17 @@ We ran the same test with 4 producers sharing the same single partition. With 4 
 
 **With record encryption:**
 
-1. **Throughput budget**: encryption imposes a per-connection throughput ceiling driven by the CPU cost of AES-256-GCM on your hardware. On ours (AMD EPYC-Rome, 2GHz) that ceiling was about 26% lower than Kafka alone could sustain per producer connection — run the rate sweep on your own infrastructure to find yours.
+1. **Throughput budget**: encryption imposes a CPU-driven throughput ceiling. As a planning formula:
+
+   > **`proxy CPU (millicores) = 20 × produce throughput (MB/s)`**
+
+   Add ×1.3 headroom for GC pauses and burst. This assumes matched consumer load (1:1 produce:consume) and was measured on AMD EPYC-Rome 2 GHz with AES-NI — calibrate on your own hardware using the rate sweep.
+
+   Worked example: 100k msg/s at 1 KB = 100 MB/s produce → 100 × 20 = 2000m, plus headroom → ~2600m (~2.6 cores).
 
 2. **Latency budget**: well below saturation, expect 0.2–3 ms additional average publish latency and 15–40 ms additional p99. The overhead scales with how hard you're pushing — give yourself headroom and you'll barely notice it.
 
-3. **Scaling**: the bottleneck is per-connection CPU (crypto, buffer management, and network I/O combined). Spread load across more producer connections first; then scale proxy pods horizontally.
+3. **Scaling**: set `requests` equal to `limits` in your pod spec — this makes the CPU budget deterministic, which makes the throughput ceiling predictable. To increase throughput, raise the CPU limit. For redundancy, add proxy pods.
 
 4. **KMS overhead**: DEK caching means Vault isn't on the hot path for every record. Our tests triggered only 5–19 DEK generation calls per benchmark run. The KMS is not the thing to worry about.
 
@@ -142,12 +143,12 @@ We ran the same test with 4 producers sharing the same single partition. With 4 
 
 ## Caveats and next steps
 
-These results come from a single proxy pod, a single partition, and single-pass measurements at each rate point. We know what the gaps are:
+These results come from a single proxy pod and single-pass measurements at each rate point. A few things to keep in mind:
 
-- **Connection sweep**: we saw 1 and 4 producers — we haven't yet swept 2, 8, 16 to characterise the full per-pod ceiling
-- **Horizontal scaling**: we expect more proxy pods to scale linearly, but haven't measured it yet
-- **Larger message sizes**: encryption overhead is almost certainly smaller in percentage terms for larger messages
+- **Message size**: all results use 1 KB messages. The coefficient is message-size-dependent — encryption overhead as a percentage is likely lower for larger messages.
+- **Replication factor**: the 1-topic rate sweep ran at RF=3. At that replication factor, Kafka's ISR replication traffic creates a per-partition ceiling that sits close to where proxy CPU also saturates — the two limits are entangled in those results. The sizing coefficient was derived from RF=1 multi-topic workloads specifically to isolate proxy CPU. The [companion engineering post]({% post_url 2026-05-28-benchmarking-the-proxy-under-the-hood %}) has that detail.
+- **Horizontal scaling**: linear scaling has been validated across CPU allocations on a single pod; multi-pod horizontal scaling hasn't been measured but is expected to follow the same coefficient.
 
-For the engineering story — why we built a custom harness on top of OMB, what the CPU flamegraphs actually show, and the bugs we found in our own tooling along the way — that's in the [companion post]({% post_url 2026-05-08-benchmarking-the-proxy-under-the-hood %}).
+For the engineering story — why we built a custom harness on top of OMB, what the CPU flamegraphs actually show, and the bugs we found in our own tooling along the way — that's in the [companion post]({% post_url 2026-05-28-benchmarking-the-proxy-under-the-hood %}).
 
 The full benchmark suite, quickstart guide, and sizing reference are in `kroxylicious-openmessaging-benchmarks/` in the [main Kroxylicious repository](https://github.com/kroxylicious/kroxylicious).

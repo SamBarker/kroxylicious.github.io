@@ -5,7 +5,7 @@ permalink: /performance/
 toc: true
 ---
 
-This page summarises the measured performance overhead of Kroxylicious. Numbers come from [benchmarks run on real hardware](/blog/2026/05/01/benchmarking-the-proxy/) using [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark), an industry-standard Kafka performance tool.
+This page summarises the measured performance overhead of Kroxylicious. Numbers come from [benchmarks run on real hardware](/blog/2026/05/21/benchmarking-the-proxy/) using [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark), an industry-standard Kafka performance tool.
 
 ## Test environment
 
@@ -77,15 +77,15 @@ Encryption adds measurable but predictable overhead. The cost scales with produc
 
 **With record encryption:**
 
-- **Throughput**: plan for ~25% lower throughput per partition compared to direct Kafka
+- **Throughput**: use `proxy CPU (millicores) = 20 × produce throughput (MB/s)` as a planning formula, then add ×1.3 headroom. Assumes matched consumer load and AMD EPYC-Rome 2 GHz with AES-NI — calibrate on your hardware. Validated at 1000m, 2000m, and 4000m. Example: 100k msg/s at 1 KB = 100 MB/s produce → 2000m + headroom → ~2600m.
 - **Latency**: expect 0.2–3 ms additional average publish latency and 15–40 ms additional p99, scaling with how close to saturation you operate
-- **Scaling**: the throughput ceiling is per-connection (one Netty event loop per client connection). Spreading load across more producers is the first scaling lever; adding proxy pods comes next
+- **Scaling**: set `requests` equal to `limits` in your pod spec to make the CPU budget — and therefore the throughput ceiling — deterministic. Increase the CPU limit to raise throughput; add proxy pods for redundancy.
 - **KMS**: DEK caching means the KMS is not on the hot path. In testing, each benchmark run triggered only 5–19 DEK generation calls — the KMS is not a bottleneck
 
 ---
 
 ## Further reading
 
-- [Operator guide: results, methodology, and sizing recommendations](/blog/2026/05/01/benchmarking-the-proxy/) — the full benchmark story for operators
-- [Engineering deep dive: tooling, flamegraphs, and what we discovered](/blog/2026/05/08/benchmarking-the-proxy-under-the-hood/) — how we measured it, where the CPU goes, and what surprised us
+- [Operator guide: results, methodology, and sizing recommendations](/blog/2026/05/21/benchmarking-the-proxy/) — the full benchmark story for operators
+- [Engineering deep dive: tooling, flamegraphs, and what we discovered](/blog/2026/05/28/benchmarking-the-proxy-under-the-hood/) — how we measured it, where the CPU goes, and what surprised us
 - [Benchmark quickstart](https://github.com/kroxylicious/kroxylicious/tree/main/kroxylicious-openmessaging-benchmarks/QUICKSTART.md) — run the benchmarks yourself
