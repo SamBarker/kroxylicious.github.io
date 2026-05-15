@@ -5,7 +5,7 @@ permalink: /performance/
 toc: true
 ---
 
-This page summarises the measured performance overhead of Kroxylicious. Numbers come from [benchmarks run on real hardware](/blog/2026/05/21/benchmarking-the-proxy/) using [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark), an industry-standard Kafka performance tool.
+This page summarises the measured performance overhead of Kroxylicious. Numbers come from [benchmarks run on real hardware](/blog/2026/05/21/benchmarking-the-proxy/) using [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark), an industry-standard Kafka performance tool. No, we didn't run this on a laptop — it's a realistic deployment: a 6-node OpenShift cluster on Fyre, IBM's internal cloud platform — a controlled environment.
 
 ## Test environment
 
@@ -73,6 +73,8 @@ Encryption adds measurable but predictable overhead. The cost scales with produc
 
 ## Sizing guidance
 
+Numbers without guidance aren't very useful, so here's how to translate these results into pod specs.
+
 **Passthrough proxy**: size your Kafka cluster as you normally would. The proxy will not be the bottleneck.
 
 **With record encryption:**
@@ -81,6 +83,18 @@ Encryption adds measurable but predictable overhead. The cost scales with produc
 - **Latency**: expect 0.2–3 ms additional average publish latency and 15–40 ms additional p99, scaling with how close to saturation you operate
 - **Scaling**: set `requests` equal to `limits` in your pod spec to make the CPU budget — and therefore the throughput ceiling — deterministic. Increase the CPU limit to raise throughput; add proxy pods for redundancy.
 - **KMS**: DEK caching means the KMS is not on the hot path. In testing, each benchmark run triggered only 5–19 DEK generation calls — the KMS is not a bottleneck
+
+---
+
+## Caveats
+
+These numbers come from a single proxy pod, 1 KB messages, and single-pass measurements. A few things that matter when applying them to your workload:
+
+- **Message size**: the sizing coefficient is message-size-dependent — encryption overhead as a percentage is likely lower for larger messages
+- **Replication factor**: the 1-topic latency and ceiling results ran at RF=3; at that replication factor Kafka's ISR replication creates a per-partition ceiling that sits close to where proxy CPU saturates. The sizing coefficient was derived from RF=1 multi-topic workloads to isolate proxy CPU
+- **Horizontal scaling**: linear scaling has been validated across CPU allocations on a single pod; multi-pod scaling hasn't been measured but is expected to follow the same coefficient
+
+The [engineering post](/blog/2026/05/28/benchmarking-the-proxy-under-the-hood/) has the full methodology detail.
 
 ---
 

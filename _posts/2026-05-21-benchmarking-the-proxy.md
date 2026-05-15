@@ -25,7 +25,7 @@ We used [OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchma
 
 ## Test environment
 
-All results were collected on a 6-node OpenShift cluster on Fyre, IBM's internal cloud environment. Kroxylicious ran as a single proxy pod with a 1000m CPU limit.
+No, we didn't run this on a laptop — it's a realistic deployment: a 6-node OpenShift cluster on Fyre, IBM's internal cloud platform — a controlled environment. Kroxylicious ran as a single proxy pod with a 1000m CPU limit.
 
 | Component | Details |
 |-----------|---------|
@@ -121,6 +121,8 @@ Going further: we swept the same workload at 1000m, 2000m, and 4000m CPU. The th
 
 ## Sizing guidance
 
+Numbers without guidance aren't very useful, so here's how to translate these results into pod specs.
+
 **Passthrough proxy**: size your Kafka cluster as you normally would. The proxy won't be the bottleneck — but if you want to verify that on your own hardware, the rate sweep is exactly the tool for it. Run the baseline and passthrough scenarios back-to-back and you'll have your own numbers.
 
 **With record encryption:**
@@ -143,7 +145,7 @@ Going further: we swept the same workload at 1000m, 2000m, and 4000m CPU. The th
 
 ## Caveats and next steps
 
-These results come from a single proxy pod and single-pass measurements at each rate point. A few things to keep in mind:
+These are real results from real hardware, but they don't tell a story for your workload. A few things worth knowing before you put these numbers in a slide deck:
 
 - **Message size**: all results use 1 KB messages. The coefficient is message-size-dependent — encryption overhead as a percentage is likely lower for larger messages.
 - **Replication factor**: the 1-topic rate sweep ran at RF=3. At that replication factor, Kafka's ISR replication traffic creates a per-partition ceiling that sits close to where proxy CPU also saturates — the two limits are entangled in those results. The sizing coefficient was derived from RF=1 multi-topic workloads specifically to isolate proxy CPU. The [companion engineering post]({% post_url 2026-05-28-benchmarking-the-proxy-under-the-hood %}) has that detail.
