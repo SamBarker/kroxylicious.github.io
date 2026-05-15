@@ -1,45 +1,55 @@
 ---
 layout: post
-title:  "Benchmarking a Kafka proxy: the engineering story"
+title:  "How hard can it be??? Maxing out a Kroxylicious instance"
 date:   2026-05-28 00:00:00 +0000
 author: "Sam Barker"
 author_url: "https://github.com/SamBarker"
 categories: benchmarking performance engineering
 ---
 
-The [first post]({% post_url 2026-05-21-benchmarking-the-proxy %}) covered what we measured and what the numbers mean for operators. This one is for the people who want to know how we measured it, what the flamegraphs actually show, and what we found when we started looking carefully at our own tooling.
+How hard can it be? We started with a laptop, a codebase, and a lot of confidence it was fast. We ended up with a benchmark harness, a six-node cluster, and a much more nuanced answer.
+
+Harder than expected. More interesting too.
+
+We gave everyone [the numbers]({% post_url 2026-05-21-benchmarking-the-proxy %}) in a bland, but slide worthy way, already. This one is the engineering story: how we built the harness, what the flamegraphs actually show, the workload design choices that changed the answers, and the bugs we found in our own tooling.
 
 ## Why not Kafka's own tools?
 
 Kafka ships with `kafka-producer-perf-test` and `kafka-consumer-perf-test`. We'd used them before. The problems:
 
 - **Too noisy**: individual runs produced widely varying results depending on JVM warm-up, scheduling jitter, and GC behaviour. Results were hard to trust and harder to compare across scenarios.
-- **Producer-only view**: `kafka-producer-perf-test` gives you publish latency, but nothing about the consumer side. You can't see end-to-end latency — which is what operators actually care about.
+- **Producer-only view**: `kafka-producer-perf-test` gives you publish latency, but nothing about the consumer side. You can't see end-to-end latency — which is something operators actually care about.
 - **Awkward to sweep**: running parametric rate sweeps requires scripting around these tools, and comparing results across scenarios requires manual work.
+- Coordinated omission: under load, kafka-producer-perf-test only measures requests it actually sends! So when things start loading up and applying back pressure the send rate drops and the latency stays looking nice and healthy. Only it's not healthy in reality, things are queuing up in your producer. 
 
-[OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark) is a better fit. It's an industry-standard tool used by Confluent, the Pulsar team, and others for their published performance comparisons. OMB coordinates producers and consumers across separate worker pods, runs a configurable warmup phase before taking measurements, and outputs structured JSON that's straightforward to process programmatically.
+And critically, it's never heard of Kroxylicious... You have though, you're here!
 
-Using OMB also means our numbers are directly comparable to other published Kafka benchmarks — that credibility matters when you're trying to make the case that your proxy doesn't break things.
+[OpenMessaging Benchmark (OMB)](https://github.com/openmessaging/benchmark) is a better fit. It's an industry-standard tool used by Confluent, the Pulsar team, and others for their published performance comparisons - so who am I to argue? OMB coordinates producers and consumers across separate worker pods, runs a configurable warmup phase before taking measurements, takes its latency tracking seriously by tracking coordinated omission, and outputs structured JSON that's straightforward to process programmatically. What's not to like? 
+
+Using OMB also means our methodology is directly comparable to other published Kafka benchmarks. The numbers aren't comparable of course it's not the same hardware, network conditions or phase of the moon. 
 
 ## What we built on top of OMB
 
-OMB handles the measurement. We built everything around it: deployment, teardown, diagnostics collection, and result processing. All of it lives in `kroxylicious-openmessaging-benchmarks/` in the main repo.
+So we just fire up OMB and get some numbers, right? Errr no. OMB just does the measurement part. I work really hard at being lazy, I hate clicking things with a mouse and I knew these tests needed to be repeatable. So we scripted deployment (of all the things) teardown (for isolation), diagnostic collection (WHAT BROKE NOW??), and last but not least result processing (what does this wall of JSON mean?)
+
+So now all of that lives in [`kroxylicious-openmessaging-benchmarks`](https://github.com/kroxylicious/kroxylicious/tree/main/kroxylicious-openmessaging-benchmarks) in the main tree (mono repo FTW).
 
 ### Helm chart
 
 A Helm chart (`helm/kroxylicious-benchmark/`) deploys the full benchmark stack into Kubernetes:
 
 - OMB coordinator and worker pods
-- A Strimzi Kafka cluster
-- The Kroxylicious proxy (via the Kroxylicious Kubernetes operator)
-- HashiCorp Vault (for the KMS in the encryption scenario)
+- A Strimzi Kafka cluster - deploying Kafka on K8s what else are you going to use? (answers to /dev/null)
+- The Kroxylicious operator
+- The Kroxylicious proxy
+- HashiCorp Vault (for the KMS in the encryption scenario). Importantly if you have your own KMS (and you will run this yourself for your workload, right?!) you can plug that in instead.
 
 Scenario-specific configuration lives in `helm/kroxylicious-benchmark/scenarios/` as YAML overrides:
 
 | Scenario file | What it deploys |
 |---------------|-----------------|
 | `baseline-values.yaml` | Direct Kafka, no proxy |
-| `proxy-no-filters-values.yaml` | Proxy with empty filter chain |
+| `proxy-no-filters-values.yaml` | Proxy with no user filters |
 | `encryption-values.yaml` | Proxy with AES-256-GCM encryption and Vault |
 | `rate-sweep-values.yaml` | Extended run profiles for sweep experiments |
 

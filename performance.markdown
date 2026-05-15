@@ -101,5 +101,5 @@ The [engineering post](/blog/2026/05/28/benchmarking-the-proxy-under-the-hood/) 
 ## Further reading
 
 - [Operator guide: results, methodology, and sizing recommendations](/blog/2026/05/21/benchmarking-the-proxy/) — the full benchmark story for operators
-- [Engineering deep dive: tooling, flamegraphs, and what we discovered](/blog/2026/05/28/benchmarking-the-proxy-under-the-hood/) — how we measured it, where the CPU goes, and what surprised us
+- [How hard can it be??? Maxing out a Kroxylicious instance](/blog/2026/05/28/benchmarking-the-proxy-under-the-hood/) — how we measured it, where the CPU goes, and what surprised us
 - [Benchmark quickstart](https://github.com/kroxylicious/kroxylicious/tree/main/kroxylicious-openmessaging-benchmarks/QUICKSTART.md) — run the benchmarks yourself
