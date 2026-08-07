@@ -68,8 +68,8 @@ even if producing applications are misconfigured.
 
 The filter currently supports two modes of operation:
 
-1. Schema validation[^1] validates the content of the record against a schema. Use this for topics which have an entry in
-   the Schema Registry.
+1. Schema validation validates the content of the record against a schema. Use this for topics which have an entry in
+   the Schema Registry. Supported schema types include JSON Schema, Apache Avro and Protocol Buffers (Protobuf).
 2. SyntacticallyCorrectJson validation ensures the producer is producing messages that contain syntactically valid JSON.
    Use for topics which do not have registered schemas.
 
@@ -90,6 +90,3 @@ The following sequence diagram shows how schema validation issues are reported b
 The filter accepts configuration that allows you to assign validators on a per-topic basis.   There are also
 configuration options that allow you to define whether the filter rejects just the records that don't meet the
 requirements of the validator, or whether then whole batch should be returned.
-
-
-[^1]: Currently, the feature supports only the JSON-Schema schema type.
