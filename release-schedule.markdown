@@ -26,7 +26,10 @@ permalink: /release-schedule/
             {%- assign underscored_version = release.version | replace: '.', '_' -%}
             <tr>
               <td>Kroxylicious {{ release.version }}</td>
-              <td>{{ release.plannedDate }}</td>
+              <td>
+                {{ release.plannedDate }}
+                {%- if release.oldDate %} <span class="text-muted">(was {{ release.oldDate }})</span>{% endif -%}
+              </td>
               <td><a href="https://github.com/kroxylicious/kroxylicious/milestone/{{ release.milestoneNumber }}">{{ release.version }}</a></td>
               <td>
                 {%- if release.projectNumber -%}
