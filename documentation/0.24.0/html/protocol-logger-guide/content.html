@@ -1,0 +1,492 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-protocol-logger-guide-protocol-logger" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Protocol Logger Filter</strong>. This filter logs the Kafka protocol requests and responses that pass through the proxy as JSON, providing a wire-level protocol trace for debugging and demonstration purposes.</p>
+    </div>
+    <div class="paragraph">
+     <p>Refer to other Kroxylicious guides for information on running the proxy or for advanced topics such as plugin development.</p>
+    </div>
+    <div class="paragraph _abstract">
+     <p>This filter logs the Kafka protocol requests and responses that pass through the proxy. Every field of every message for the configured API keys is logged as version-aware JSON. This is a wire-level protocol trace, not a curated view of what a client is doing, and it is intended for debugging and demonstration purposes.</p>
+    </div>
+    <div class="paragraph">
+     <p>The filter is silent by default. For output to appear, the logging backend must be enabled at the filter’s configured log level for the logger used by the filter instance. This means the same filter configuration can be deployed everywhere and operators can turn output on and off from the logging backend, without a proxy restart or configuration change.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-protocol-logger-filter-protocol-logger">1. Configuring the Protocol Logger filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This procedure describes how to set up the Protocol Logger filter by configuring it in Kroxylicious.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure a <code>ProtocolLogger</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-protocol-logger">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-protocol-logger">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+      <li>
+       <p>Enable the logging backend at the configured level for the logger used by the filter instance, as described in <a href="#con-enabling-protocol-logger-output-protocol-logger">Enabling log output</a>.</p>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-protocol-logger">1.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here is a complete example of a <code>filterDefinitions</code> entry configured for the Protocol Logger:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-protocol-logger-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">ProtocolLogger</span></span>
+    <span class="key">config</span>:
+      <span class="key">logLevel</span>: <span class="string"><span class="content">DEBUG</span></span>
+      <span class="key">apiKeyNames</span>:
+        - <span class="string"><span class="content">METADATA</span></span>
+        - <span class="string"><span class="content">PRODUCE</span></span>
+        - <span class="string"><span class="content">FETCH</span></span>
+      <span class="key">loggerName</span>: <span class="string"><span class="content">protocol.downstream</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>logLevel</code> (optional) is the SLF4J level at which the filter emits log messages. Defaults to <code>DEBUG</code>. The logging backend must be enabled at this level for the filter’s logger, otherwise no output appears.</p>
+       </li>
+       <li>
+        <p><code>apiKeyNames</code> (optional) is the set of Kafka <code>ApiKeys</code> enum names to log. If absent or empty, all API keys are logged. Names are resolved case-insensitively and with non-alphanumeric characters stripped, so <code>FindCoordinator</code>, <code>find-coordinator</code>, and <code>FIND_COORDINATOR</code> all resolve to the same API key.</p>
+       </li>
+       <li>
+        <p><code>loggerName</code> (optional) is the SLF4J logger name used by this filter instance. Defaults to the filter class name, <code>io.kroxylicious.filter.protocollogger.ProtocolLoggerFilter</code>.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>All configuration properties are optional, so the <code>config</code> block may be omitted entirely to log all API keys at <code>DEBUG</code> level.</p>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">On an idle consumer the output is dominated by <code>HEARTBEAT</code> and <code>FETCH</code> messages. Use <code>apiKeyNames</code> to filter these out. This filter skips decoding for API keys not in the configured set, avoiding formatting cost for excluded messages. Note that another filter in the chain may still require decoding of those same messages.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>You can define more than one instance of the filter, placing one at each end of the filter chain to see the effect of the filters between them. Distinct logger names let each instance be enabled independently from the logging backend:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: log-downstream</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">ProtocolLogger</span></span>
+    <span class="key">config</span>:
+      <span class="key">loggerName</span>: <span class="string"><span class="content">protocol.downstream</span></span>
+  - <span class="string"><span class="content">name: log-upstream</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">ProtocolLogger</span></span>
+    <span class="key">config</span>:
+      <span class="key">loggerName</span>: <span class="string"><span class="content">protocol.upstream</span></span>
+<span class="key">defaultFilters</span>:
+  - <span class="string"><span class="content">log-downstream</span></span>
+  - <span class="string"><span class="content">some-other-filter</span></span>
+  - <span class="string"><span class="content">log-upstream</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-protocol-logger">1.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here is a complete example of a <code>KafkaProtocolFilter</code> resource configured for the Protocol Logger:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-protocol-logger-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">ProtocolLogger</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">logLevel</span>: <span class="string"><span class="content">DEBUG</span></span>
+    <span class="key">apiKeyNames</span>:
+      - <span class="string"><span class="content">METADATA</span></span>
+      - <span class="string"><span class="content">PRODUCE</span></span>
+      - <span class="string"><span class="content">FETCH</span></span>
+    <span class="key">loggerName</span>: <span class="string"><span class="content">protocol.downstream</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>logLevel</code> (optional) is the SLF4J level at which the filter emits log messages. Defaults to <code>DEBUG</code>. The logging backend must be enabled at this level for the filter’s logger, otherwise no output appears.</p>
+       </li>
+       <li>
+        <p><code>apiKeyNames</code> (optional) is the set of Kafka <code>ApiKeys</code> enum names to log. If absent or empty, all API keys are logged. Names are resolved case-insensitively and with non-alphanumeric characters stripped, so <code>FindCoordinator</code>, <code>find-coordinator</code>, and <code>FIND_COORDINATOR</code> all resolve to the same API key.</p>
+       </li>
+       <li>
+        <p><code>loggerName</code> (optional) is the SLF4J logger name used by this filter instance. Defaults to the filter class name, <code>io.kroxylicious.filter.protocollogger.ProtocolLoggerFilter</code>.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>All configuration properties are optional, so the <code>configTemplate</code> block may be omitted entirely to log all API keys at <code>DEBUG</code> level.</p>
+     </div>
+     <div class="paragraph">
+      <p>You can define more than one instance of the filter, placing one at each end of the filter chain to see the effect of the filters between them. Distinct logger names let each instance be enabled independently from the logging backend:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">log-downstream</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">ProtocolLogger</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">loggerName</span>: <span class="string"><span class="content">protocol.downstream</span></span></code></pre>
+      </div>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">log-upstream</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">ProtocolLogger</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">loggerName</span>: <span class="string"><span class="content">protocol.upstream</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>Reference both resources from the virtual cluster’s filter list, with the other filters between them.</p>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-enabling-protocol-logger-output-protocol-logger">2. Enabling log output</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The filter is silent by default. Two settings must agree for output to appear:</p>
+    </div>
+    <div class="olist arabic">
+     <ol class="arabic">
+      <li>
+       <p>The filter’s own <code>logLevel</code> configuration property (default <code>DEBUG</code>).</p>
+      </li>
+      <li>
+       <p>The logging backend must be enabled at that level for the logger used by the filter instance.</p>
+      </li>
+     </ol>
+    </div>
+    <div class="paragraph">
+     <p>Setting one without the other produces no output at all. With default settings, adding the filter to your proxy configuration and seeing nothing is expected — the logging backend must also be told to emit <code>DEBUG</code> messages for the filter’s logger.</p>
+    </div>
+    <div class="paragraph">
+     <p>The simplest way to see output is to set the environment variable before starting the proxy:</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="shell">KROXYLICIOUS_APP_LOG_LEVEL=DEBUG bin/kroxylicious-start.sh --config proxy-config.yaml</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>This enables <code>DEBUG</code> for all <code>io.kroxylicious</code> loggers. For a more targeted approach, add a logger entry to <code>log4j2.yaml</code> as described in the next section.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="runtime_log_level_tuning">2.1. Runtime log level tuning</h3>
+     <div class="paragraph">
+      <p>The same filter configuration can be deployed to development and production environments. Operators turn output on and off by tuning the logging backend — no proxy restart and no configuration change are required.</p>
+     </div>
+     <div class="paragraph">
+      <p>Add <code>monitorInterval</code> to the top of your <code>log4j2.yaml</code> so that Log4j 2 re-reads the file periodically. Then add a logger entry for the filter:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">Configuration</span>:
+  <span class="key">monitorInterval</span>: <span class="string"><span class="content">5</span></span>          <span class="comment"># re-read this file every 5 seconds</span>
+  <span class="comment"># ... appenders unchanged ...</span>
+  <span class="key">Loggers</span>:
+    <span class="comment"># ... other loggers ...</span>
+    <span class="key">Logger</span>:
+      - <span class="string"><span class="content">name: io.kroxylicious.filter.protocollogger.ProtocolLoggerFilter</span></span>
+        <span class="key">level</span>: <span class="string"><span class="content">DEBUG</span></span>           <span class="comment"># change to WARN or OFF to silence</span>
+        <span class="key">additivity</span>: <span class="string"><span class="content">false</span></span>
+        <span class="key">AppenderRef</span>:
+          - <span class="string"><span class="content">ref: STDOUT</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p><code>monitorInterval</code> is what makes this work without a restart. Edit the file, change the level, and within <code>monitorInterval</code> seconds the proxy starts or stops emitting protocol traces.</p>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">The default <code>log4j2.yaml</code> shipped with the proxy distribution does <strong>not</strong> include <code>monitorInterval</code>. An operator must add it to enable live tuning.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>When using a custom <code>loggerName</code>, the logger entry must match that name instead of the filter class name.</p>
+     </div>
+     <div class="paragraph">
+      <p>Other SLF4J backends work too — the only requirement is a logger enabled at the configured level for the name used by the filter instance. Log4j 2 is the example because it is what the proxy distribution uses by default.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-protocol-logger-output-format-protocol-logger">3. Output format</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Each log entry is a single JSON object with a <code>header</code> and a <code>payload</code>. The payload is rendered using Apache Kafka’s generated JSON converters, so the structure follows the exact wire format of the negotiated API version.</p>
+    </div>
+    <div class="paragraph">
+     <p>An example request entry:</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="json">{
+  <span class="key"><span class="delimiter">"</span><span class="content">header</span><span class="delimiter">"</span></span> : {
+    <span class="key"><span class="delimiter">"</span><span class="content">type</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">REQUEST</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">apiKey</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">METADATA</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">apiVersion</span><span class="delimiter">"</span></span> : <span class="integer">13</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">correlationId</span><span class="delimiter">"</span></span> : <span class="integer">1</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">clientId</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">producer-1</span><span class="delimiter">"</span></span>
+  },
+  <span class="key"><span class="delimiter">"</span><span class="content">payload</span><span class="delimiter">"</span></span> : {
+    <span class="key"><span class="delimiter">"</span><span class="content">topics</span><span class="delimiter">"</span></span> : [ {
+      <span class="key"><span class="delimiter">"</span><span class="content">topicId</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">AAAAAAAAAAAAAAAAAAAAAA</span><span class="delimiter">"</span></span>,
+      <span class="key"><span class="delimiter">"</span><span class="content">name</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">my-topic</span><span class="delimiter">"</span></span>
+    } ],
+    <span class="key"><span class="delimiter">"</span><span class="content">allowAutoTopicCreation</span><span class="delimiter">"</span></span> : <span class="value">true</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">includeTopicAuthorizedOperations</span><span class="delimiter">"</span></span> : <span class="value">false</span>
+  }
+}</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>An example response entry:</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="json">{
+  <span class="key"><span class="delimiter">"</span><span class="content">header</span><span class="delimiter">"</span></span> : {
+    <span class="key"><span class="delimiter">"</span><span class="content">type</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">RESPONSE</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">apiKey</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">METADATA</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">apiVersion</span><span class="delimiter">"</span></span> : <span class="integer">13</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">correlationId</span><span class="delimiter">"</span></span> : <span class="integer">1</span>
+  },
+  <span class="key"><span class="delimiter">"</span><span class="content">payload</span><span class="delimiter">"</span></span> : {
+    <span class="key"><span class="delimiter">"</span><span class="content">throttleTimeMs</span><span class="delimiter">"</span></span> : <span class="integer">0</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">brokers</span><span class="delimiter">"</span></span> : [ {
+      <span class="key"><span class="delimiter">"</span><span class="content">nodeId</span><span class="delimiter">"</span></span> : <span class="integer">1</span>,
+      <span class="key"><span class="delimiter">"</span><span class="content">host</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">localhost</span><span class="delimiter">"</span></span>,
+      <span class="key"><span class="delimiter">"</span><span class="content">port</span><span class="delimiter">"</span></span> : <span class="integer">9194</span>,
+      <span class="key"><span class="delimiter">"</span><span class="content">rack</span><span class="delimiter">"</span></span> : <span class="value">null</span>
+    } ],
+    <span class="key"><span class="delimiter">"</span><span class="content">clusterId</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">MkU3OEVBNTcwNTJENDM2Qk</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">controllerId</span><span class="delimiter">"</span></span> : <span class="integer">1</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">topics</span><span class="delimiter">"</span></span> : [ ],
+    <span class="key"><span class="delimiter">"</span><span class="content">errorCode</span><span class="delimiter">"</span></span> : <span class="integer">0</span>
+  }
+}</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Note that <code>clientId</code> appears only on requests — it does not exist on the wire for responses, and responses omit the key entirely rather than emitting null.</p>
+    </div>
+    <div class="paragraph">
+     <p>Structured key-values are appended by the logging framework after the JSON body. These include <code>apiKey</code>, <code>apiVersion</code>, <code>clientCorrelationId</code>, <code>direction</code>, and <code>sessionId</code>, plus <code>clientId</code> on requests only.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="machine_parseable_output">3.1. Machine-parseable output</h3>
+     <div class="paragraph">
+      <p>Each log entry is JSON, but a log <strong>line</strong> is not — the logging backend’s timestamp, level, and logger name prefix surround it. Piping raw log output to <code>jq</code> fails unless you either strip the prefix or use a message-only appender.</p>
+     </div>
+     <div class="paragraph">
+      <p>To get machine-parseable output, add a message-only appender to your <code>log4j2.yaml</code>:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">Configuration</span>:
+  <span class="key">Appenders</span>:
+    <span class="key">Console</span>:
+      - <span class="string"><span class="content">name: PROTOCOL_TRACE</span></span>
+        <span class="key">PatternLayout</span>:
+          <span class="key">pattern</span>: <span class="string"><span class="delimiter">"</span><span class="content">%m%n</span><span class="delimiter">"</span></span>
+  <span class="key">Loggers</span>:
+    <span class="key">Logger</span>:
+      - <span class="string"><span class="content">name: io.kroxylicious.filter.protocollogger.ProtocolLoggerFilter</span></span> <span class="comment"># or your configured loggerName</span>
+        <span class="key">level</span>: <span class="string"><span class="content">DEBUG</span></span>
+        <span class="key">additivity</span>: <span class="string"><span class="content">false</span></span>
+        <span class="key">AppenderRef</span>:
+          - <span class="string"><span class="content">ref: PROTOCOL_TRACE</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>With that appender, each entry is a multi-line pretty-printed JSON object — <code>jq</code> reads the stream directly, but line-oriented tools such as <code>grep</code> do not see one entry per line:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="shell"># select METADATA entries (both request and response)
+jq -c 'select(.header.apiKey == "METADATA")' &lt; proxy-trace.log</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="pairing_requests_and_responses">3.2. Pairing requests and responses</h3>
+     <div class="paragraph">
+      <p>Use the <code>sessionId</code> structured key-value together with <code>.header.correlationId</code>. Correlation IDs are only unique within a single connection, so <code>sessionId</code> is required to pair correctly across concurrent connections.</p>
+     </div>
+     <div class="paragraph">
+      <p><code>sessionId</code> is deliberately not in the JSON entry — it is proxy-internal state, not part of the protocol trace. It appears only in the structured key-values.</p>
+     </div>
+     <div class="paragraph">
+      <p>Correlation IDs in the output are not necessarily client correlation IDs. Filters can dispatch out-of-band requests upstream, which carry synthetic negative correlation IDs. Depending on its position in the filter chain, this filter may observe such requests and cannot reliably tell them apart from client traffic, so pairing may produce entries with no counterpart.</p>
+     </div>
+     <div class="paragraph">
+      <p>Latency can be derived from the log timestamps of matched request and response pairs.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-protocol-logger-security-protocol-logger">4. Security considerations</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The bodies of credential-bearing API keys are never logged. The following API keys are hardcoded as excluded:</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p><code>SASL_AUTHENTICATE</code></p>
+      </li>
+      <li>
+       <p><code>CREATE_DELEGATION_TOKEN</code></p>
+      </li>
+      <li>
+       <p><code>RENEW_DELEGATION_TOKEN</code></p>
+      </li>
+      <li>
+       <p><code>EXPIRE_DELEGATION_TOKEN</code></p>
+      </li>
+      <li>
+       <p><code>ALTER_USER_SCRAM_CREDENTIALS</code></p>
+      </li>
+      <li>
+       <p><code>DESCRIBE_DELEGATION_TOKEN</code></p>
+      </li>
+     </ul>
+    </div>
+    <div class="paragraph">
+     <p>This is deliberately not configurable. For these API keys, the message body is structurally withheld rather than redacted after the fact. The header is still emitted so the handshake remains visible; the payload is replaced with a null and a <code>payloadWithheld</code> field explains why:</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="json">{
+  <span class="key"><span class="delimiter">"</span><span class="content">header</span><span class="delimiter">"</span></span> : {
+    <span class="key"><span class="delimiter">"</span><span class="content">type</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">REQUEST</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">apiKey</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">SASL_AUTHENTICATE</span><span class="delimiter">"</span></span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">apiVersion</span><span class="delimiter">"</span></span> : <span class="integer">2</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">correlationId</span><span class="delimiter">"</span></span> : <span class="integer">2147483642</span>,
+    <span class="key"><span class="delimiter">"</span><span class="content">clientId</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">producer-1</span><span class="delimiter">"</span></span>
+  },
+  <span class="key"><span class="delimiter">"</span><span class="content">payload</span><span class="delimiter">"</span></span> : <span class="value">null</span>,
+  <span class="key"><span class="delimiter">"</span><span class="content">payloadWithheld</span><span class="delimiter">"</span></span> : <span class="string"><span class="delimiter">"</span><span class="content">credential-bearing API</span><span class="delimiter">"</span></span>
+}</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Record payloads (the content of Produce and Fetch messages) are not logged in readable form. Kafka’s generated JSON converters emit an empty byte array for records-typed fields regardless of content, so the binary record payload never appears in the output.</p>
+    </div>
+    <div class="paragraph">
+     <p>Other protocol fields are logged verbatim. Metadata such as topic names, consumer group names, and client identifiers may themselves be sensitive in your environment, so treat the resulting log output with the same care as any other log data.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">5. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

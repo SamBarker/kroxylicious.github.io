@@ -1,0 +1,91 @@
+{% raw %}
+<div id="toc" class="toc">
+ <ul class="sectlevel1">
+  <li><a href="#con-authentication-overview-authentication">1. Overview of client authentication</a>
+   <ul class="sectlevel2">
+    <li><a href="#authentication_mechanisms">1.1. Authentication mechanisms</a></li>
+    <li><a href="#the_authenticated_subject">1.2. The authenticated subject</a></li>
+   </ul></li>
+  <li><a href="#con-sasl-authentication-modes-authentication">2. SASL authentication modes</a>
+   <ul class="sectlevel2">
+    <li><a href="#sasl_passthrough">2.1. SASL Passthrough</a></li>
+    <li><a href="#sasl_passthrough_inspection">2.2. SASL Passthrough Inspection</a></li>
+    <li><a href="#oauthbearer_validation">2.3. OAuthBearer Validation</a></li>
+    <li><a href="#sasl_termination">2.4. SASL Termination</a></li>
+   </ul></li>
+  <li><a href="#con-choosing-authentication-approach-authentication">3. Choosing an authentication approach</a>
+   <ul class="sectlevel2">
+    <li><a href="#mutual_tls_mtls">3.1. Mutual TLS (mTLS)</a></li>
+    <li><a href="#sasl_passthrough_2">3.2. SASL Passthrough</a></li>
+    <li><a href="#sasl_passthrough_inspection_2">3.3. SASL Passthrough Inspection</a></li>
+    <li><a href="#oauthbearer_validation_2">3.4. OAuthBearer Validation</a></li>
+    <li><a href="#sasl_termination_2">3.5. SASL Termination</a></li>
+    <li><a href="#combining_approaches">3.6. Combining approaches</a></li>
+   </ul></li>
+  <li><a href="#con-choosing-sasl-mechanism-authentication">4. Choosing a SASL mechanism</a>
+   <ul class="sectlevel2">
+    <li><a href="#mechanism_overview">4.1. Mechanism overview</a></li>
+    <li><a href="#security_considerations">4.2. Security considerations</a></li>
+    <li><a href="#operational_considerations">4.3. Operational considerations</a></li>
+    <li><a href="#when_to_use_each_mechanism">4.4. When to use each mechanism</a></li>
+    <li><a href="#summary_comparison">4.5. Summary comparison</a></li>
+   </ul></li>
+  <li><a href="#con-subjects-and-subject-builders-authentication">5. Understanding subjects and subject builders</a>
+   <ul class="sectlevel2">
+    <li><a href="#subjects_and_principals">5.1. Subjects and principals</a></li>
+    <li><a href="#subject_builders">5.2. Subject builders</a></li>
+    <li><a href="#subject_lifecycle">5.3. Subject lifecycle</a></li>
+   </ul></li>
+  <li><a href="#assembly-configuring-client-mtls-authentication">6. Configuring client mutual TLS (mTLS)</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-configuring-vc-client-tls-authentication">6.1. Securing connections from clients</a></li>
+   </ul></li>
+  <li><a href="#con-configuring-vc-transport-subject-builder-authentication">7. Configuring the transport subject builder</a>
+   <ul class="sectlevel2">
+    <li><a href="#configuration">7.1. Configuration</a></li>
+    <li><a href="#supported_fields">7.2. Supported fields</a></li>
+    <li><a href="#replacement_matchers">7.3. Replacement matchers</a></li>
+   </ul></li>
+  <li><a href="#con-configuring-sasl-passthrough-authentication">8. Configuring SASL Passthrough</a></li>
+  <li><a href="#assembly-configuring-authentication-sasl-inspection-auth-sasl-inspection">9. Configuring SASL Passthrough Inspection</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-example-proxy-config-auth-sasl-inspection">9.1. Example proxy configuration file</a></li>
+    <li><a href="#con-example-kafkaprotocolfilter-resource-auth-sasl-inspection">9.2. Example <code>KafkaProtocolFilter</code> resource</a></li>
+   </ul></li>
+  <li><a href="#assembly-configuring-authentication-sasl-termination-auth-sasl-termination">10. Configuring SASL Termination</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-example-proxy-config-auth-sasl-termination">10.1. Example proxy configuration file</a></li>
+    <li><a href="#con-example-kafkaprotocolfilter-resource-auth-sasl-termination">10.2. Example <code>KafkaProtocolFilter</code> resource</a></li>
+    <li><a href="#proc-managing-scram-credentials-auth-sasl-termination">10.3. Managing SCRAM credentials</a></li>
+    <li><a href="#con-scram-security-auth-sasl-termination">10.4. SCRAM security considerations</a></li>
+   </ul></li>
+  <li><a href="#assembly-configuring-authentication-oauthbearer-auth-oauthbearer">11. Configuring OAuthBearer Validation</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-example-proxy-config-auth-oauthbearer">11.1. Example proxy configuration file</a></li>
+    <li><a href="#con-example-kafkaprotocolfilter-resource-auth-oauthbearer">11.2. Example <code>KafkaProtocolFilter</code> resource</a></li>
+   </ul></li>
+  <li><a href="#con-configuring-sasl-subject-builder-authentication">12. Configuring SASL subject builder</a>
+   <ul class="sectlevel2">
+    <li><a href="#configuration_2">12.1. Configuration</a></li>
+    <li><a href="#supported_fields_2">12.2. Supported fields</a></li>
+    <li><a href="#replacement_matchers_2">12.3. Replacement matchers</a></li>
+   </ul></li>
+  <li><a href="#con-authentication-metrics-authentication">13. Authentication metrics</a>
+   <ul class="sectlevel2">
+    <li><a href="#available_metrics">13.1. Available metrics</a></li>
+    <li><a href="#sasl_termination_metrics">13.2. SASL Termination metrics</a></li>
+    <li><a href="#operational_use">13.3. Operational use</a></li>
+   </ul></li>
+  <li><a href="#con-authentication-logging-authentication">14. Authentication logging</a>
+   <ul class="sectlevel2">
+    <li><a href="#runtime_authentication_logs">14.1. Runtime authentication logs</a></li>
+    <li><a href="#sasl_inspection_filter_logs">14.2. SASL Inspection filter logs</a></li>
+    <li><a href="#sasl_termination_filter_logs">14.3. SASL Termination filter logs</a></li>
+    <li><a href="#oauthbearer_validation_filter_logs">14.4. OAuthBearer Validation filter logs</a></li>
+    <li><a href="#operational_guidance">14.5. Operational guidance</a></li>
+   </ul></li>
+  <li><a href="#trademark_notice">15. Trademark notice</a></li>
+  <li><a href="#ref-authentication-glossary-authentication">16. Glossary</a></li>
+ </ul>
+</div>
+{% endraw %}

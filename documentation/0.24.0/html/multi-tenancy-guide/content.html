@@ -1,0 +1,225 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-multi-tenancy-guide-multi-tenancy" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Multi-tenancy Filter</strong> to present a single Kafka cluster as if it were multiple clusters. Refer to other Kroxylicious guides for information on running the proxy or for advanced topics such as plugin development.</p>
+    </div>
+    <div class="paragraph _abstract">
+     <p>Kroxylicious’s Multi-tenancy filter presents a single Kafka cluster to tenants as if it were multiple clusters. Operations are isolated to a single tenant by prefixing resources with an identifier.</p>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">This filter is currently in incubation and available as a preview. We would not recommend using it in a production environment.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="paragraph">
+     <p>The Multi-tenancy filter works by intercepting all Kafka RPCs (remote procedure calls) that reference resources, such as topic names and consumer group names:</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">Request path</dt>
+      <dd>
+       <p>On the request path, resource names are prefixed with a tenant identifier.</p>
+      </dd>
+      <dt class="hdlist1">Response path</dt>
+      <dd>
+       <p>On the response path, the prefix is removed.</p>
+      </dd>
+     </dl>
+    </div>
+    <div class="paragraph">
+     <p>Kafka RPCs that list resources are filtered so that only resources belonging to the tenant are returned, effectively creating a private cluster experience for each tenant.</p>
+    </div>
+    <div class="paragraph">
+     <p>To set up the filter, configure it in Kroxylicious.</p>
+    </div>
+    <div class="admonitionblock important">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+        <td class="content">While the Multi-tenancy filter isolates operations on resources, it does not isolate user identities across tenants. User authentication and ACLs (Access Control Lists) are shared across all tenants, meaning that identity is not scoped to individual tenants. For more information on open issues related to this filter, see <a href="https://github.com/kroxylicious/kroxylicious/issues" target="_blank" rel="noopener">Kroxylicious issues</a>.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">For more information on Kafka’s support for multi-tenancy, see the <a href="https://kafka.apache.org" target="_blank" rel="noopener">Apache Kafka website</a>.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-multi-tenancy-filter-multi-tenancy">1. (Preview) Setting up the Multi-tenancy filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This procedure describes how to set up the Multi-tenancy filter by configuring it in Kroxylicious. The filter dynamically prefixes resource names to create isolation between tenants using the same Kafka cluster. The prefix representing a tenant is taken from the name of the virtual cluster representing the tenant. For example, if the virtual cluster is named <code>tenant-1</code>, the prefix is <code>tenant-1</code>. Each tenant must be represented by a unique virtual cluster, and virtual cluster names must be globally unique within the Kroxylicious configuration. This means that the same virtual cluster name cannot be used to represent different Kafka clusters.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure a <code>MultiTenant</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-multi-tenancy">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-multi-tenancy">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+      <li>
+       <p>Verify that multi-tenancy filtering has been applied.</p>
+       <div class="paragraph">
+        <p>For example, create a topic through each virtual cluster and check that the topics are prefixed with the name of the corresponding virtual cluster.</p>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-multi-tenancy">1.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>filterDefinitions</code> entry configured for multi-tenancy:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>filterDefinitions</code> configuration
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-multi-tenant-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">MultiTenant</span></span>
+    <span class="key">config</span>:
+      <span class="key">prefixResourceNameSeparator</span>: <span class="string"><span class="delimiter">"</span><span class="content">.</span><span class="delimiter">"</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>prefixResourceNameSeparator</code> defines the separator used for the prefix. If a separator is not specified, <code>-</code> is the default.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">Currently, only the prefix with separator is validated.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-multi-tenancy">1.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for record validation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProtocolFilter</code> resource for record validation
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-validation-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">MultiTenant</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">prefixResourceNameSeparator</span>: <span class="string"><span class="delimiter">"</span><span class="content">.</span><span class="delimiter">"</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>prefixResourceNameSeparator</code> defines the separator used for the prefix. If a separator is not specified, <code>-</code> is the default.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">2. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

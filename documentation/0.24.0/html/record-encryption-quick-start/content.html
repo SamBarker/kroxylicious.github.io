@@ -1,0 +1,459 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Are you looking for an <a href="https://kroxylicious.io/use-cases/#encryption-at-rest">encryption-at-rest</a> solution for data stored in your Apache Kafka?</p>
+    </div>
+    <div class="paragraph">
+     <p>This quick start guide will show you how to do that on Kubernetes …​ from scratch …​ without external dependencies. You’ll be encrypting in a snap!</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="objectives">1. Objectives</h2>
+   <div class="sectionbody">
+    <div class="ulist">
+     <ul>
+      <li>
+       <p>Deploy a Kafka Cluster to a Kubernetes cluster.</p>
+      </li>
+      <li>
+       <p>Deploy a Key Management Service (KMS) - we’ll show you how, with either HashiCorp Vault or AWS Localstack.</p>
+      </li>
+      <li>
+       <p>Deploy Kroxylicious and configure it to proxy the cluster and apply Record Encryption.</p>
+      </li>
+      <li>
+       <p>Produce/consume records to Kafka via the proxy demonstrating the transparent encryption.</p>
+      </li>
+      <li>
+       <p>Verify that the records are encrypted on the broker.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="admonitionblock warning">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+        <td class="content">You <strong>really don’t</strong> want to use this quickstart to deploy an environment that will be used in <strong>production</strong>. The quickstart deliberately keeps things quick and simple…​ there’s no authentication, no TLS, no redundancy…​ Development purposes only - please! Refer to the documentation for Kroxylicious, Strimzi and your KMS for production best practices.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="overview">2. Overview</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>This diagram shows the important components that will be deployed by the quickstart. Arrows on the diagrams explain the important flows between them. The pods shown in yellow run the kafka console producer and kafka console consumers command line applications. These pods are used to demonstrate the record encryption in action.</p>
+    </div>
+    <div class="paragraph">
+     <p>The diagram omits the operators.</p>
+    </div>
+    <div class="imageblock">
+     <div class="content">
+      <img src="../images/quickstart-record-encryption.svg" alt="Diagram showing the important kubernetes resources deployed by the quickstart and the flows between them">
+     </div>
+     <div class="title">Figure 1. Important resources and the flows between them</div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="before_you_begin">3. Before you begin</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>You’ll need the following software installed:</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p><a href="https://minikube.sigs.k8s.io/docs/start">Minikube</a></p>
+      </li>
+      <li>
+       <p><a href="https://helm.sh/docs/intro/install/">Helm</a></p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="start_minikube">4. Start Minikube</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>We’ll use a Minikube profile to keep it separate from any other work you are doing in Minikube. We use a profile called <code>quickstart-nnnnn</code> (if you already have <code>MINIKUBE_PROFILE</code> set, that profile is used instead).</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ export MINIKUBE_PROFILE=${MINIKUBE_PROFILE:-quickstart-${RANDOM}}</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Let’s get the Kubernetes Cluster up and running. Minikube defaults work just fine for this quickstart.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ minikube start</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="install_the_software">5. Install the software</h2>
+   <div class="sectionbody">
+    <div class="sect2">
+     <h3 id="install_a_kms">5.1. Install a KMS</h3>
+     <div class="paragraph">
+      <p>Record Encryption needs somewhere to store its encryption keys, so you need to provide a KMS. Use Helm to install either HashiCorp Vault or AWS LocalStack.</p>
+     </div>
+     <details>
+      <summary class="title">AWS LocalStack</summary>
+      <div class="content">
+       <div class="paragraph">
+        <p><a href="https://localstack.cloud/">LocalStack</a> is an AWS cloud service emulator that runs in a single container on your laptop or in your CI environment. It’s intended for developing and testing cloud &amp; Serverless apps offline.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="terminal">$ helm repo add --force-update localstack-repo https://helm.localstack.cloud
+$ helm upgrade --install localstack localstack-repo/localstack --namespace kms --create-namespace --version 0.6.27 --set image.tag=4.14.0@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a --set service.type=ClusterIP --wait</code></pre>
+        </div>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">After installation, the LocalStack Helm chart prompts you to "Get the application URL". For this quickstart, you can ignore these steps.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+      </div>
+     </details>
+     <details>
+      <summary class="title">HashiCorp Vault</summary>
+      <div class="content">
+       <div class="paragraph">
+        <p>HashiCorp Vault is available as a Cloud Service or standalone. In this guide, we take install it standalone on Minikube. Note that Record Encryption requires the Transit Secrets Engine, which must be enabled.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="terminal">$ helm repo add --force-update hashicorp https://helm.releases.hashicorp.com
+$ helm upgrade --install vault hashicorp/vault --namespace kms --create-namespace --version 0.32.0 --set server.dev.enabled=true,server.dev.devRootToken=myroottoken --wait</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>And enable the Transit Secrets Engine.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl wait -n kms --for=condition=Ready pod/vault-0 --timeout=300s &amp;&amp; kubectl exec -n kms statefulsets/vault -- vault secrets enable transit</code></pre>
+        </div>
+       </div>
+      </div>
+     </details>
+    </div>
+    <div class="sect2">
+     <h3 id="install_the_strimzi_operator">5.2. Install the Strimzi Operator</h3>
+     <div class="paragraph">
+      <p>We are going to use <a href="https://strimzi.io/">Strimzi</a> to deploy the Kafka Cluster that will be proxied. Let’s install Strimzi next:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="terminal">$ helm upgrade --install strimzi-operator oci://quay.io/strimzi-helm/strimzi-kafka-operator --namespace kafka --create-namespace --version 1.2.0</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="install_the_operator">5.3. Install the Kroxylicious Operator</h3>
+     <div class="paragraph">
+      <p>First, create a temporary directory for some working files. We use a directory called <code>ko-install-nnnnn</code> beneath <code>/tmp</code>, but you can use any name and location you like.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="terminal">$ QUICKSTART_DIR=/tmp/ko-install-${RANDOM}
+$ mkdir -p ${QUICKSTART_DIR}
+$ cd ${QUICKSTART_DIR}</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>Now let’s download and unpack the Kroxylicious Operator</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="terminal">$ curl --fail --location --silent https://github.com/kroxylicious/kroxylicious/releases/download/v0.24.0/kroxylicious-operator-0.24.0.zip --output kroxylicious-operator.zip
+$ unzip -q kroxylicious-operator.zip</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>And install the Kroxylicious Operator</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl apply -f install
+$ kubectl wait --namespace kroxylicious-operator deployment/kroxylicious-operator --for=condition=Available=True --timeout=300s</code></pre>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="deploy_the_cluster">6. Deploy the Kafka Cluster</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Now we need a Kafka Cluster. This is the Kafka Cluster that will be proxied. We’ll just use one from the Strimzi Quickstart. It will create a cluster in the <code>kafka</code> namespace.</p>
+    </div>
+    <div class="admonitionblock tip">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-tip" title="Tip"></i></td>
+        <td class="content">To use a local Strimzi manifest (for example, in air-gapped environments), set <code>STRIMZI_MANIFEST=/path/to/kafka-single-node.yaml</code> before running these commands.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl apply -n kafka -f ${STRIMZI_MANIFEST:-https://raw.githubusercontent.com/strimzi/strimzi-kafka-operator/refs/tags/1.2.0/examples/kafka/kafka-single-node.yaml}
+$ kubectl wait -n kafka kafka/my-cluster --for=condition=Ready --timeout=300s</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>We’ll need the bootstrap server address of the Kafka cluster later, so let’s assign a variable containing it now.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ DIRECT_CLUSTER_BOOTSTRAP_SERVERS=$(kubectl get -n kafka kafka my-cluster -o=jsonpath='{.status.listeners[0].bootstrapServers}')</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="deploy_the_proxy">7. Deploy the Proxy with Record Encryption</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Next, we’ll deploy a Kroxylicious proxy instance using the record encryption example included in the install zip you downloaded when you <a href="#install_the_operator">installed the operator</a></p>
+    </div>
+    <div class="paragraph">
+     <p>It will create an instance of Kroxylicious that will proxy the kafka cluster you <a href="#deploy_the_cluster">created above</a>. It will configure it to use the Record Encryption filter to encrypt as records are sent by producers and decrypt them as records get fetched by consumers. The proxy will be created the <code>my-proxy</code> namespace</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl apply -f examples/record-encryption/</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>You need to update the example to find keys in your chosen KMS.</p>
+    </div>
+    <details>
+     <summary class="title">AWS LocalStack</summary>
+     <div class="content">
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl patch -n my-proxy kafkaprotocolfilters.kroxylicious.io encryption --patch '{"spec":{"configTemplate":{"kms":"AwsKmsService","kmsConfig":{"credentials":{"longTerm":{"accessKeyId":{"password":"unused"},"secretAccessKey": {"password":"unused"}}},"endpointUrl":"http://localstack.kms.svc.cluster.local:4566/", "region" : "us-east-1"}, "selector" : "TemplateKekSelector", "selectorConfig" : {"template": "KEK-$(topicName)"}}}}' --type merge</code></pre>
+       </div>
+      </div>
+     </div>
+    </details>
+    <details>
+     <summary class="title">HashiCorp Vault</summary>
+     <div class="content">
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl patch -n my-proxy kafkaprotocolfilters.kroxylicious.io encryption --patch '{"spec":{"configTemplate":{"kms":"VaultKmsService","kmsConfig":{"vaultToken":{"password":"myroottoken"},"vaultTransitEngineUrl":"http://vault.kms.svc.cluster.local:8200/v1/transit"}, "selector" : "TemplateKekSelector", "selectorConfig" : {"template": "KEK-$(topicName)"}}}}' --type merge</code></pre>
+       </div>
+      </div>
+     </div>
+    </details>
+    <div class="paragraph">
+     <p>Let’s wait for the Proxy to be ready:</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl wait -n my-proxy kafkaproxy/simple --for=condition=Ready=True --timeout=300s</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>and wait for the virtual cluster to be ready for connections.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl wait -n my-proxy virtualkafkacluster my-cluster --for=jsonpath='{.status.ingresses[?(@.name=="cluster-ip")]}' --timeout=300s</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Finally, let’s assign a variable containing the virtual cluster’s bootstrap address. We’ll use this later to produce and consumer records through the proxy.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ PROXIED_CLUSTER_BOOTSTRAP_SERVER=$(kubectl get -n my-proxy virtualkafkacluster my-cluster -o=jsonpath='{.status.ingresses[?(@.name=="cluster-ip")].bootstrapServer}')</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="create_an_encryption_key_in_the_kms">8. Create an encryption key in the KMS</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Record Encryption needs an encryption key to use when encrypting the records produced to the topic. Let’s create an encryption key in our KMS now.</p>
+    </div>
+    <div class="paragraph">
+     <p>The filter is configured to expect a key to exist in the KMS with the name <code>KEK-&lt;topic name&gt;</code>. We are going to be using a topic called <code>trades</code> so we will create a key that can be referred to using the name <code>KEK-trades</code>.</p>
+    </div>
+    <details>
+     <summary class="title">AWS LocalStack</summary>
+     <div class="content">
+      <div class="paragraph">
+       <p>With LocalStack, you need to create a key and an alias to that key.</p>
+      </div>
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="terminal">$ KEY_ID=$(kubectl -n kms exec deployments/localstack --  awslocal kms create-key --query KeyMetadata.KeyId --output text)
+$ kubectl -n kms exec deployments/localstack -- awslocal kms create-alias --alias-name alias/KEK-trades --target-key-id ${KEY_ID}</code></pre>
+       </div>
+      </div>
+     </div>
+    </details>
+    <details>
+     <summary class="title">HashiCorp Vault</summary>
+     <div class="content">
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl exec -n kms statefulsets/vault -- vault write -f transit/keys/KEK-trades</code></pre>
+       </div>
+      </div>
+     </div>
+    </details>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="produce_some_messages">9. Produce some messages</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Now let’s use Kafka’s console producer CLI to send a few records to a topic called <code>trades</code>. The Record Encryption filter will encrypt the records before they reach broker, but this is completely transparent to the console producer.</p>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">You can safely ignore the warning about the UNKNOWN_TOPIC_OR_PARTITION, the topic will be created automatically.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ (echo 'IBM:100'; echo 'APPLE:99') | kubectl run -n my-proxy --quiet=true --stdin=true proxy-producer --image=quay.io/strimzi/kafka:1.2.0-kafka-4.3.1 --rm=true --restart=Never -- ./bin/kafka-console-producer.sh --bootstrap-server ${PROXIED_CLUSTER_BOOTSTRAP_SERVER} --topic trades</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="consume_the_messages">10. Consume the messages</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Now let’s use Kafka’s console consumer to fetch the records. You’ll see the two records we <a href="#produce_some_messages">sent above</a>. The Record Encryption filter will decrypt the records before they reach consumer, but this is completely transparent to the console consumer.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl run -n my-proxy --quiet=true --attach=true --stdin=false proxy-consumer --image=quay.io/strimzi/kafka:1.2.0-kafka-4.3.1 --rm=true --restart=Never -- ./bin/kafka-console-consumer.sh  --bootstrap-server ${PROXIED_CLUSTER_BOOTSTRAP_SERVER} --topic trades --from-beginning --max-messages 2</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="verify_that_the_records_are_encrypted_on_the_broker">11. Verify that the records are encrypted on the broker</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Consuming the same records we wrote is a bit underwhelming! And, in fact, it’s what we’d expect to see with a vanilla, unproxied, Kafka cluster. So how do we know the records really encrypted on the broker? Let’s use the console consumer again, but this time we’ll consume straight from the Kafka cluster, bypassing the proxy. We’ll get back the records, but they’ll contain ciphertext, rather than the plaintext.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl run -n kafka --quiet=true --attach=true --stdin=false cluster-consumer --image=quay.io/strimzi/kafka:1.2.0-kafka-4.3.1 --rm=true --restart=Never -- ./bin/kafka-console-consumer.sh  --bootstrap-server ${DIRECT_CLUSTER_BOOTSTRAP_SERVERS} --topic trades --from-beginning --max-messages 2</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="cleaning_up">12. Cleaning up</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>To clean up, remove the proxy and the kafka cluster</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl delete -f examples/record-encryption/
+$ kubectl delete -n kafka -f ${STRIMZI_MANIFEST:-https://raw.githubusercontent.com/strimzi/strimzi-kafka-operator/refs/tags/1.2.0/examples/kafka/kafka-single-node.yaml}</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Remove the Kroxylicious and Strimzi Operator.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl delete -f install
+$ helm uninstall -n kafka strimzi-operator --ignore-not-found</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Remove the KMS.</p>
+    </div>
+    <details>
+     <summary class="title">AWS LocalStack</summary>
+     <div class="content">
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="terminal">$ helm uninstall -n kms localstack --ignore-not-found</code></pre>
+       </div>
+      </div>
+     </div>
+    </details>
+    <details>
+     <summary class="title">HashiCorp Vault</summary>
+     <div class="content">
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="terminal">$ helm uninstall -n kms vault --ignore-not-found</code></pre>
+       </div>
+      </div>
+     </div>
+    </details>
+    <div class="paragraph">
+     <p>Remove the namespaces.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ kubectl delete ns kafka kms</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Finally clean up the Minikube profile.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="terminal">$ minikube stop
+$ minikube delete</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="what_next">13. What next?</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Learn more from the <a href="../record-encryption-guide/">Record Encryption guide</a> and from the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a></p>
+    </div>
+    <div class="paragraph">
+     <p>You are also welcome to come talk to us. Chat with us in <a href="https://kroxylicious.slack.com//">Slack</a> or start a <a href="https://github.com/kroxylicious/kroxylicious/discussions">Github Discussion</a>.</p>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

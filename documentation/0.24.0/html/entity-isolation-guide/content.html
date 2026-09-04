@@ -1,0 +1,307 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-entity-isolation-guide-entity-isolation" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Entity Isolation Filter</strong>. This filter gives each authenticated user a private space within a Kafka cluster, isolated from other users sharing the same cluster. Isolation can be applied selectively to some entity types and not others. For example, it’s possible to have isolation for consumer groups, but not for topics.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-entity-isolation-overview-entity-isolation">1. Entity isolation overview</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The Kroxylicious Entity Isolation filter gives each authenticated client a private, isolated view of certain Kafka entity types within a shared cluster. When entity isolation is enabled for a resource type, each client connecting through the proxy operates as if it owns that namespace entirely — it cannot see, interfere with, or accidentally collide with the same-named resources belonging to other clients.</p>
+    </div>
+    <div class="paragraph">
+     <p>The filter achieves this by intercepting Kafka RPCs on the request and response paths:</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p>On the <strong>request path</strong>, resource names are transparently mapped from the client’s isolated view to a cluster-wide name that includes a client-specific prefix or transformation.</p>
+      </li>
+      <li>
+       <p>On the <strong>response path</strong>, the cluster-wide name is mapped back to the client’s view. Resources that do not belong to the current client’s namespace are filtered out of list and describe responses.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="imageblock">
+     <div class="content">
+      <img src="../images/entity-isolation-seq.svg" alt="Diagram showing how the entity isolation rewrites requests and responses.">
+     </div>
+     <div class="title">Figure 1. Entity Isolation filter — request and response path</div>
+    </div>
+    <div class="paragraph">
+     <p>To use the Entity Isolation filter, the proxy must determine the authenticated subject. The authenticated subject is the verified identity of the client, derived from successful authentication.</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p>If your applications use TLS client authentication, configure the <a href="../kroxylicious-proxy/">transport subject builder within the virtual cluster</a> to build a subject based on the client certificate.</p>
+      </li>
+      <li>
+       <p>If your applications use SASL authentication, configure the <a href="../authentication-guide/">SASL inspection filter</a> to build the authenticated subject from the successful SASL exchange between the client and the broker.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="sect2">
+     <h3 id="supported_entity_types">1.1. Supported entity types</h3>
+     <div class="paragraph">
+      <p>The current implementation supports isolation for the following Kafka entity types:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">
+        <code>GROUP_ID</code>
+       </dt>
+       <dd>
+        <p>Consumer group identifiers used in all consumer group RPCs (e.g. <code>JoinGroup</code>, <code>OffsetFetch</code>, <code>DeleteGroups</code>).</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>TRANSACTIONAL_ID</code>
+       </dt>
+       <dd>
+        <p>Transactional producer identifiers used in transactional RPCs (e.g. <code>InitProducerId</code>, <code>AddPartitionsToTxn</code>, <code>EndTxn</code>).</p>
+       </dd>
+      </dl>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">Topic name isolation is not yet supported. For more information, see the <a href="https://github.com/kroxylicious/kroxylicious/issues/3504" target="_blank" rel="noopener">related issue</a>.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-entity-isolation-detail-entity-isolation">2. How entity isolation works</h2>
+   <div class="sectionbody">
+    <div class="sect2">
+     <h3 id="name_mapping">2.1. Name mapping</h3>
+     <div class="paragraph">
+      <p>The filter delegates all resource name transformations to a pluggable <code>EntityNameMapper</code>. The mapper is given the authenticated subject of the current connection and the entity type being mapped, and is responsible for:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Translating a client-visible name to a cluster-visible name (mapping).</p>
+       </li>
+       <li>
+        <p>Translating a cluster-visible name back to a client-visible name (unmapping).</p>
+       </li>
+       <li>
+        <p>Deciding whether a cluster-visible name falls within the current client’s namespace.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>The built-in mapper, <code>PrincipalEntityNameMapper</code>, prefixes resource names with the name of a principal from the authenticated subject. By default, the mapper extracts the <code>io.kroxylicious.proxy.authentication.User</code> principal type from the subject. This can be overridden to any other class that implements the <code>io.kroxylicious.proxy.authentication.Principal</code> interface that has the <code>io.kroxylicious.proxy.authentication.Unique</code> class-level annotation. The mapper requires that the authenticated subject provides exactly one principal of the expected type, otherwise the connection will be closed with an error.</p>
+     </div>
+     <div class="paragraph">
+      <p>When forming the cluster-visible name, the mapper separates the principal name from the resource name using a separator. The separator defaults to a hyphen (<code>-</code>), but this can also be overridden in configuration. If a client authenticates with a principal that contains the separator, the filter will disconnect the client with an error.</p>
+     </div>
+     <div class="paragraph">
+      <p>Both the principal name and the separator must contain only ASCII alphanumerics, '.', '_' and '-'. This restriction comes from Kafka itself.</p>
+     </div>
+     <div class="paragraph">
+      <p>To illustrate the default behavior of the mapper, given a principal name <code>alice</code> and a consumer group called <code>my-consumer-group</code>, the group is stored on the broker as <code>alice-my-consumer-group</code>.</p>
+     </div>
+     <div class="admonitionblock important">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+         <td class="content">
+          <div class="paragraph">
+           <p>The filter can only guarantee non-collision for clients that connect through the proxy. If clients connect straight to the broker, there is no mechanism to prevent them from creating resources that collide with the cluster-visible names chosen by this filter.</p>
+          </div>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="request_path">2.2. Request path</h3>
+     <div class="paragraph">
+      <p>When a Kafka request arrives at the proxy:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>The filter identifies fields in the request that reference entity types for which isolation is enabled.</p>
+       </li>
+       <li>
+        <p>Each matching field value is passed to the <code>EntityNameMapper</code> which returns the cluster-visible name.</p>
+       </li>
+       <li>
+        <p>The mutated request is forwarded to the broker.</p>
+       </li>
+      </ol>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="response_path">2.3. Response path</h3>
+     <div class="paragraph">
+      <p>When the broker’s response arrives at the proxy:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>The filter identifies fields in the response that reference entity types for which isolation is enabled.</p>
+       </li>
+       <li>
+        <p>For each such field, the <code>EntityNameMapper</code> checks whether the value belongs to the current client’s namespace.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p>If it does, the value is unmapped to the client-visible name and passed through.</p>
+          </li>
+          <li>
+           <p>If it does not, the filter removes the containing record from the response.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+       <li>
+        <p>The mutated response is returned to the client.</p>
+       </li>
+      </ol>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-entity-isolation-filter-entity-isolation">3. Configuring the Entity Isolation filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This procedure describes how to set up the Entity Isolation filter by configuring it in Kroxylicious.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure an <code>EntityIsolation</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-entity-isolation">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-entity-isolation">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-entity-isolation">3.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the Entity Isolation filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>filterDefinitions</code> entry configured for entity isolation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>filterDefinitions</code> configuration
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-entity-isolation</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">EntityIsolation</span></span>
+    <span class="key">config</span>:
+      <span class="key">entityTypes</span>:
+        - <span class="string"><span class="content">GROUP_ID</span></span>
+        - <span class="string"><span class="content">TRANSACTIONAL_ID</span></span>
+      <span class="key">mapper</span>: <span class="string"><span class="content">PrincipalEntityNameMapperService</span></span>
+      <span class="key">mapperConfig</span>:
+        <span class="key">separator</span>: <span class="string"><span class="delimiter">"</span><span class="content">-</span><span class="delimiter">"</span></span>
+        <span class="key">principalType</span>: <span class="string"><span class="content">&lt;principal implementation&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>entityTypes</code> is an array of entity types to isolate. Allowed values are <code>GROUP_ID</code> and <code>TRANSACTIONAL_ID</code>.</p>
+       </li>
+       <li>
+        <p><code>mapper</code> is the name of the naming mapping service implementation. Currently, this must be <code>PrincipalEntityNameMapperService</code>.</p>
+       </li>
+       <li>
+        <p><code>separator</code> is the string that the mapper uses to separate the principal from the resource name.</p>
+       </li>
+       <li>
+        <p><code>principalType</code> identifies the principal type within the subject that will be used to form the cluster-visible entity names. Use the fully-qualified class name of the principal. Defaults to <code>io.kroxylicious.proxy.authentication.User</code> if not specified.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-entity-isolation">3.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for entity isolation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-entity-isolation</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">EntityIsolation</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">entityTypes</span>:
+      - <span class="string"><span class="content">GROUP_ID</span></span>
+      - <span class="string"><span class="content">TRANSACTIONAL_ID</span></span>
+    <span class="key">mapper</span>: <span class="string"><span class="content">PrincipalEntityNameMapperService</span></span>
+    <span class="key">mapperConfig</span>:
+      <span class="key">separator</span>: <span class="string"><span class="delimiter">"</span><span class="content">-</span><span class="delimiter">"</span></span>
+      <span class="key">principalType</span>: <span class="string"><span class="content">&lt;principal implementation&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>entityTypes</code> is an array of entity types to isolate. Allowed values are <code>GROUP_ID</code> and <code>TRANSACTIONAL_ID</code>.</p>
+       </li>
+       <li>
+        <p><code>mapper</code> is the name of the naming mapping service implementation. Currently, this must be <code>PrincipalEntityNameMapperService</code>.</p>
+       </li>
+       <li>
+        <p><code>separator</code> is the string that the mapper uses to separate the principal from the resource name.</p>
+       </li>
+       <li>
+        <p><code>principalType</code> identifies the principal type within the subject that will be used to form the cluster-visible entity names. Use the fully-qualified class name of the principal. Defaults to <code>io.kroxylicious.proxy.authentication.User</code> if not specified.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

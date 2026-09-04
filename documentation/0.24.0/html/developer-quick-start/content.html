@@ -1,0 +1,172 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Kroxylicious' composable filter chains and pluggable API mean that you can write your own filters to apply your own rules to the Kafka protocol, using the Java programming language.</p>
+    </div>
+    <div class="paragraph">
+     <p>In this quick start guide you will build a custom filter and use it to modify messages being sent to/consumed from Kafka, learn about filter configuration and running custom filters, and find a starting point for developing your own custom filters with your own rules and logic.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="getting_started">1. Getting started</h2>
+   <div class="sectionbody">
+    <div class="sect2">
+     <h3 id="prerequisites">1.1. Prerequisites</h3>
+     <div class="paragraph">
+      <p>To start developing your own custom filters for Kroxylicious, you will need to install <a href="https://openjdk.org/projects/jdk/21/">JDK 21</a>.</p>
+     </div>
+     <div class="paragraph">
+      <p>You’ll also need to install the <a href="https://maven.apache.org/index.html">Apache Maven CLI</a> and one of either <a href="https://podman.io/docs/installation">Podman</a> or <a href="https://docs.docker.com/install/">Docker</a>.</p>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">If you are using Podman, you may encounter issues with the integration tests. There are instructions <a href="https://github.com/kroxylicious/kroxylicious/blob/main/DEV_GUIDE.md#running-integration-tests-on-podman">here</a> to resolve this.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="generate_a_sample_filter_project">1.2. Generate a Sample Filter Project</h3>
+     <div class="paragraph">
+      <p>The easiest way to learn how to build custom filters is with our <code>kroxylicious-filter-archetype</code> maven archetype, which will generate some basic find-and-replace filters for you to experiment with. Begin by generating a sample project:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="shell">mvn archetype:generate -DarchetypeGroupId=io.kroxylicious \
+                       -DarchetypeArtifactId=kroxylicious-filter-archetype \
+                       -DarchetypeVersion=0.24.0 \
+                       -DgroupId=org.example \
+                       -DartifactId=sample-filter \
+                       -Dversion=1.0-SNAPSHOT \
+                       -DinteractiveMode=false
+cd sample-filter</code></pre>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="build_the_sample_filter_project">2. Build the Sample Filter project</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Building the sample project is easy!</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="shell">mvn verify</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Note that the sample project includes automated unit and integration tests. The project’s powerful integration tests run against an in-VM Kafka cluster, enabling you to rapidly iterate on your filter’s business logic.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="run_the_built_sample_filter_module_in_a_proxy">3. Run the built Sample Filter module in a Proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>To build and run your sample filter</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="shell">chmod +x run.sh
+./run.sh --config sample-proxy-config.yaml</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>Send a Kafka message containing <code>foo</code> through the proxy. You should see the content transformed, with the word <code>foo</code> replaced by <code>baz</code> in the message received by the consumer.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="shell">podman run -it --net host \
+           --entrypoint /opt/kafka/bin/kafka-console-producer.sh \
+           apache/kafka:4.1.0 \
+           --bootstrap-server localhost:9192 \
+           --topic hello
+&gt;foo
+
+podman run -it --net host \
+           --entrypoint /opt/kafka/bin/kafka-console-consumer.sh \
+           apache/kafka:4.1.0 \
+           --bootstrap-server localhost:9192 \
+           --topic hello \
+           --from-beginning
+baz</code></pre>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="configure_the_filter">4. Configure the Filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Filters can be added and removed by altering the <code>filterDefinitions</code> list in the <code>sample-proxy-config.yaml</code> file. You can also reconfigure the sample filters by changing the configuration values in this file. Note that the proxy must be restarted when you modify the configuration.</p>
+    </div>
+    <div class="paragraph">
+     <p>The <strong>SampleFetchResponseFilter</strong> and <strong>SampleProduceRequestFilter</strong> each have two configuration values that must be specified for them to work:</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p><code>findValue</code> - the string the filter will search for in the produce/fetch data</p>
+      </li>
+      <li>
+       <p><code>replacementValue</code> - the string the filter will replace the value above with</p>
+      </li>
+     </ul>
+    </div>
+    <div class="sect2">
+     <h3 id="default_configuration">4.1. Default Configuration</h3>
+     <div class="paragraph">
+      <p>The default configuration for <strong>SampleProduceRequestFilter</strong> is:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: produce-request-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">SampleProduceRequestFilterFactory</span></span>
+    <span class="key">config</span>:
+      <span class="key">findValue</span>: <span class="string"><span class="content">foo</span></span>
+      <span class="key">replacementValue</span>: <span class="string"><span class="content">bar</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>This means that it will search for the string <code>foo</code> in the produce data and replace all occurrences with the string <code>bar</code>. For example, if a Kafka Producer sent a produce request with data <code>{"myValue":"foo"}</code>, the filter would transform this into <code>{"myValue":"bar"}</code> and Kroxylicious would send that to the Kafka Broker instead.</p>
+     </div>
+     <div class="paragraph">
+      <p>The default configuration for <strong>SampleFetchResponseFilter</strong> is:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: fetch-response-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">SampleFetchResponseFilterFactory</span></span>
+    <span class="key">config</span>:
+      <span class="key">findValue</span>: <span class="string"><span class="content">bar</span></span>
+      <span class="key">replacementValue</span>: <span class="string"><span class="content">baz</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>This means that it will search for the string <code>bar</code> in the fetch data and replace all occurrences with the string <code>baz</code>. For example, if a Kafka Broker sent a fetch response with data <code>{"myValue":"bar"}</code>, the filter would transform this into <code>{"myValue":"baz"}</code> and Kroxylicious would send that to the Kafka Consumer instead.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="modify">4.2. Modify</h3>
+     <div class="paragraph">
+      <p>Now that you know how the sample filters work, you can start modifying them! Replace the <code>SampleFilterTransformer</code> logic with your own code, change which messages they apply to, or whatever else you like!</p>
+     </div>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

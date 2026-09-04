@@ -1,0 +1,166 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-connection-expiration-guide-connection-expiration" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Connection Expiration Filter</strong>. This filter closes client connections after a configurable expiration age, helping to rebalance connections across proxy instances in dynamic environments such as Kubernetes.</p>
+    </div>
+    <div class="paragraph">
+     <p>Refer to other Kroxylicious guides for information on running the proxy or for advanced topics such as plugin development.</p>
+    </div>
+    <div class="paragraph _abstract">
+     <p>This filter closes client connections after a configurable expiration age. This is useful in environments like Kubernetes where proxy instances scale up and down. Long-lived client connections can become stuck on old proxy instances, causing connection skew. By closing connections after a maximum age, clients will reconnect and be balanced across the available proxy instances.</p>
+    </div>
+    <div class="paragraph">
+     <p>When jitter is configured, the effective deadline is randomized within <code>[maxAge - jitter, maxAge + jitter]</code> per connection to avoid thundering herd reconnection storms.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-connection-expiration-filter-connection-expiration">1. Configuring the Connection Expiration filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This procedure describes how to set up the Connection Expiration filter by configuring it in Kroxylicious.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure a <code>ConnectionExpiration</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-connection-expiration">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-connection-expiration">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-connection-expiration">1.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>filterDefinitions</code> entry configured for Connection Expiration:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-connection-expiration-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">ConnectionExpiration</span></span>
+    <span class="key">config</span>:
+      <span class="key">maxAge</span>: <span class="string"><span class="delimiter">"</span><span class="content">1h</span><span class="delimiter">"</span></span>
+      <span class="key">jitter</span>: <span class="string"><span class="delimiter">"</span><span class="content">5m</span><span class="delimiter">"</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>maxAge</code> (required) is the maximum age of a connection before it will be closed. Must be a positive duration (for example, <code>"1h"</code>, <code>"30m"</code>, <code>"3600s"</code>).</p>
+       </li>
+       <li>
+        <p><code>jitter</code> (optional) is the jitter to apply to the max age, randomizing the effective deadline within <code>[maxAge - jitter, maxAge + jitter]</code> per connection. Must be non-negative and not greater than <code>maxAge</code>. If omitted, no jitter is applied.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-connection-expiration">1.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for Connection Expiration:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-connection-expiration-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">ConnectionExpiration</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">maxAge</span>: <span class="string"><span class="delimiter">"</span><span class="content">1h</span><span class="delimiter">"</span></span>
+    <span class="key">jitter</span>: <span class="string"><span class="delimiter">"</span><span class="content">5m</span><span class="delimiter">"</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>maxAge</code> (required) is the maximum age of a connection before it will be closed. Must be a positive duration (for example, <code>"1h"</code>, <code>"30m"</code>, <code>"3600s"</code>).</p>
+       </li>
+       <li>
+        <p><code>jitter</code> (optional) is the jitter to apply to the max age, randomizing the effective deadline within <code>[maxAge - jitter, maxAge + jitter]</code> per connection. Must be non-negative and not greater than <code>maxAge</code>. If omitted, no jitter is applied.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">2. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

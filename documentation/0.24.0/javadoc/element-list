@@ -1,0 +1,12 @@
+io.kroxylicious.authorizer.service
+io.kroxylicious.kms.service
+io.kroxylicious.proxy.authentication
+io.kroxylicious.proxy.config.secret
+io.kroxylicious.proxy.config.tls
+io.kroxylicious.proxy.filter
+io.kroxylicious.proxy.filter.filterresultbuilder
+io.kroxylicious.proxy.filter.metadata
+io.kroxylicious.proxy.plugin
+io.kroxylicious.proxy.router
+io.kroxylicious.proxy.tls
+io.kroxylicious.proxy.topology

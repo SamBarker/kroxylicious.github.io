@@ -1,0 +1,3140 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-authentication-guide-authentication" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers configuring <strong>client authentication</strong> for Kroxylicious. It explains how the proxy authenticates Kafka clients using TLS and SASL, and how authentication information is turned into the authenticated subject that other filters can use.</p>
+    </div>
+    <div class="paragraph">
+     <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for general proxy configuration and the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for deploying the proxy on Kubernetes.</p>
+    </div>
+    <div class="paragraph _abstract">
+     <p>This guide explains how to configure client authentication for the Kroxylicious proxy. It covers TLS and SASL authentication mechanisms, the different SASL authentication modes available, and how the proxy builds authenticated subjects from client identity information.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-authentication-overview-authentication">1. Overview of client authentication</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Kroxylicious is a Layer 7 (application layer) proxy for the Kafka protocol. It understands and can act on the content of Kafka protocol messages, rather than simply forwarding TCP traffic.</p>
+    </div>
+    <div class="paragraph">
+     <p>This architecture has an important consequence for TLS: the proxy always <em>terminates</em> TLS connections from clients. Unlike a network-layer (Layer 4) proxy, it cannot pass TLS connections through transparently because it needs to read and potentially modify Kafka protocol messages. If TLS is configured between clients and the proxy, the proxy holds the server certificate and manages the TLS session with the client. A separate TLS session may be established between the proxy and the upstream Kafka brokers.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="authentication_mechanisms">1.1. Authentication mechanisms</h3>
+     <div class="paragraph">
+      <p>Client authentication in Kroxylicious can use either or both of the following mechanisms:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Client mutual TLS (mTLS)</dt>
+       <dd>
+        <p>The proxy requires clients to present a TLS client certificate during the TLS handshake. The proxy validates the certificate against a trust store containing trusted CA certificates. This provides strong client identity based on the certificate’s subject or subject alternative names (SANs).</p>
+       </dd>
+       <dt class="hdlist1">SASL authentication</dt>
+       <dd>
+        <p>Kafka clients and brokers use the Simple Authentication and Security Layer (SASL) protocol to authenticate. The proxy can interact with this SASL exchange in several ways, ranging from transparently forwarding it to actively validating credentials. For more information about SASL authentication modes, see <a href="#con-sasl-authentication-modes-authentication">SASL authentication modes</a>.</p>
+       </dd>
+      </dl>
+     </div>
+     <div class="paragraph">
+      <p>These mechanisms are not mutually exclusive. A deployment can use mTLS to establish transport-level identity and SASL to establish application-level identity.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="the_authenticated_subject">1.2. The authenticated subject</h3>
+     <div class="paragraph">
+      <p>When authentication succeeds, the proxy constructs an <em>authenticated subject</em> representing the client’s identity. A subject contains one or more <em>principals</em> — named identifiers such as a user name derived from a certificate DN or a SASL authorization ID.</p>
+     </div>
+     <div class="paragraph">
+      <p>Filters in the proxy chain can access the authenticated subject to make decisions about the client. For example, the authorization filter uses the subject to enforce access control policies, and the entity isolation filter uses it to provide per-client topic namespaces.</p>
+     </div>
+     <div class="paragraph">
+      <p>Without authentication, the subject is anonymous and identity-aware filters cannot function.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-sasl-authentication-modes-authentication">2. SASL authentication modes</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The proxy can interact with the SASL authentication exchange between a Kafka client and broker in several ways. Each mode offers a different trade-off between simplicity, visibility, and security.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_passthrough">2.1. SASL Passthrough</h3>
+     <div class="paragraph">
+      <p>In SASL Passthrough mode, the proxy forwards <code>SaslHandshake</code> and <code>SaslAuthenticate</code> requests from the client to the broker and relays the broker’s responses back to the client without inspecting or modifying them.</p>
+     </div>
+     <div class="paragraph">
+      <p>This is the <strong>default behavior</strong> when no SASL-related filter is configured. The proxy acts as a transparent intermediary for the SASL exchange.</p>
+     </div>
+     <div class="paragraph">
+      <p>In this mode, the proxy does not know the client’s identity. The authenticated subject remains anonymous, so identity-aware filters such as authorization or entity isolation cannot function.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_passthrough_inspection">2.2. SASL Passthrough Inspection</h3>
+     <div class="paragraph">
+      <p>In SASL Passthrough Inspection mode, the proxy observes the SASL exchange as it passes through. It extracts the client’s authorization ID from the SASL messages without modifying them. The broker still makes the final decision about whether authentication succeeds or fails.</p>
+     </div>
+     <div class="paragraph">
+      <p>This mode is implemented by the <code>SaslInspection</code> filter. When the broker accepts the client’s credentials, the filter constructs an authenticated subject from the authorization ID, making the client’s identity available to other filters in the chain.</p>
+     </div>
+     <div class="paragraph">
+      <p>The <code>SaslInspection</code> filter supports the following SASL mechanisms:</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 1. Supported SASL mechanisms for inspection</caption>
+      <colgroup>
+       <col style="width: 50%;">
+       <col style="width: 50%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">SASL mechanism</th>
+        <th class="tableblock halign-left valign-top">Enabled by default</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><a href="https://tools.ietf.org/html/rfc4616">PLAIN</a></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><a href="https://datatracker.ietf.org/doc/html/rfc7677">SCRAM-SHA-256</a></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><a href="https://datatracker.ietf.org/doc/html/draft-melnikov-scram-sha-512-00">SCRAM-SHA-512</a></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><a href="https://datatracker.ietf.org/doc/html/rfc7628">OAUTHBEARER</a></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+     <div class="paragraph">
+      <p>Mechanisms that transmit credentials in plain text (such as PLAIN) are disabled by default to avoid plain-text passwords existing in the proxy’s memory.</p>
+     </div>
+     <div class="paragraph">
+      <p>For the <code>OAUTHBEARER</code> mechanism, only JWT tokens that use signatures (JWS) are supported. JWT tokens that use encryption (JWE) are not supported. Unsigned JWT tokens are supported but not recommended for production use.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="oauthbearer_validation">2.3. OAuthBearer Validation</h3>
+     <div class="paragraph">
+      <p>OAuthBearer Validation is a specialized mode in which the proxy validates a client’s JWT bearer token <em>before</em> forwarding the SASL exchange to the broker. If the token is invalid, the proxy short-circuits the exchange and returns an error to the client without contacting the broker.</p>
+     </div>
+     <div class="paragraph">
+      <p>This mode is implemented by the <code>OauthBearerValidation</code> filter. It reduces load on the broker by rejecting clients with invalid or expired tokens at the proxy before their application requests are forwarded.</p>
+     </div>
+     <div class="paragraph">
+      <p>The filter validates tokens against a JSON Web Key Set (JWKS) retrieved from a configurable endpoint. It supports configurable token validation including expected audience, expected issuer, and custom claim names.</p>
+     </div>
+     <div class="paragraph">
+      <p>To limit the impact of repeated authentication failures, the filter applies exponential backoff to clients that present invalid tokens.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_termination">2.4. SASL Termination</h3>
+     <div class="paragraph">
+      <p>In SASL Termination mode, the proxy handles the SASL authentication exchange itself, without forwarding <code>SaslAuthenticate</code> requests to the broker. The proxy validates the client’s credentials directly and constructs an authenticated subject on success.</p>
+     </div>
+     <div class="paragraph">
+      <p>This mode is implemented by the <code>SaslTermination</code> filter. It fully decouples client authentication from broker authentication, which can be useful when the proxy and broker use different credential stores or when you want to ensure that only authenticated clients' application requests are forwarded to the broker.</p>
+     </div>
+     <div class="paragraph">
+      <p>The <code>SaslTermination</code> filter supports the <code>OAUTHBEARER</code>, <code>SCRAM-SHA-256</code>, and <code>SCRAM-SHA-512</code> SASL mechanisms. If a client attempts to use a mechanism that is not configured, the proxy rejects the handshake with an unsupported mechanism error and closes the connection. For <code>OAUTHBEARER</code>, the filter validates JWT tokens against a JSON Web Key Set (JWKS) retrieved from a configurable endpoint, checking the token signature, audience, issuer, and expiry. For <code>SCRAM-SHA-256</code> and <code>SCRAM-SHA-512</code>, the filter validates client credentials against a pluggable credential store that provides the SCRAM derived keys for each user.</p>
+     </div>
+     <div class="paragraph">
+      <p>The filter supports session expiry and reauthentication (<a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate">KIP-368</a>). When a token’s expiry is reached, the client must reauthenticate or the connection is closed.</p>
+     </div>
+     <div class="paragraph">
+      <p>Because SASL is terminated at the proxy, certain Kafka APIs that depend on a broker-side SASL session are not available. The filter removes the Delegation Token APIs (<code>CreateDelegationToken</code>, <code>RenewDelegationToken</code>, <code>ExpireDelegationToken</code>, <code>DescribeDelegationToken</code>) and the SCRAM credential APIs (<code>AlterUserScramCredentials</code>, <code>DescribeUserScramCredentials</code>) from the <code>ApiVersions</code> response and rejects any requests for these APIs.</p>
+     </div>
+     <div class="paragraph">
+      <p>To mitigate timing side-channel attacks (such as username enumeration), the filter applies a configurable fixed delay to each authentication round. This ensures that authentication responses take a consistent amount of time regardless of the reason for success or failure.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-choosing-authentication-approach-authentication">3. Choosing an authentication approach</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section provides guidance to help you choose the right authentication approach based on your existing infrastructure, security requirements, and required proxy features.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="mutual_tls_mtls">3.1. Mutual TLS (mTLS)</h3>
+     <div class="paragraph">
+      <p>Use mTLS when:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Clients can use certificates signed by a trusted issuer. While straightforward if you operate your own PKI, this approach also works with externally issued certificates if you trust the issuing CAs.</p>
+       </li>
+       <li>
+        <p>You want strong transport-level identity without depending on SASL.</p>
+       </li>
+       <li>
+        <p>You are willing to manage the operational overhead of certificate distribution, renewal, and revocation.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>mTLS is independent of any SASL mechanism. The client’s identity is derived from the TLS client certificate, so even clients that do not use SASL authentication can be identified.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_passthrough_2">3.2. SASL Passthrough</h3>
+     <div class="paragraph">
+      <p>Use SASL Passthrough (the default) when:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>You do not need the proxy to know the client’s identity.</p>
+       </li>
+       <li>
+        <p>Your filters do not require an authenticated subject (for example, you are using only record encryption or record validation).</p>
+       </li>
+       <li>
+        <p>You want the simplest possible configuration.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Because the broker still authenticates the client and sees the same identity as if the client had connected without the proxy, broker-side features that depend on client identity — such as authorization (ACLs), audit logging, and quotas — continue to work without any changes to your existing broker configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Be aware that in this mode the proxy cannot log which client is making requests, and identity-aware filters cannot function.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_passthrough_inspection_2">3.3. SASL Passthrough Inspection</h3>
+     <div class="paragraph">
+      <p>Use SASL Passthrough Inspection when:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>You need the proxy to know the client’s identity (for example, to use the <code>Authorization</code> filter or <code>EntityIsolation</code> filter).</p>
+       </li>
+       <li>
+        <p>You want the broker to remain the authority for authentication decisions.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Because the broker remains the authentication authority and sees the same client identity as if the client had connected without the proxy, broker-side features that depend on client identity — such as authorization (ACLs), audit logging, and quotas — continue to work without any changes to your existing broker configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Consider the following:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>The broker still decides whether authentication succeeds. An unauthenticated attacker that can reach the proxy still has proxied access to the broker — the proxy forwards their application requests without restriction. If your threat model requires that only authenticated clients' requests are forwarded to the broker, consider OAuthBearer Validation, SASL Termination, or mTLS instead.</p>
+       </li>
+       <li>
+        <p>The proxy observes the SASL exchange and holds the authorization ID in memory. For mechanisms that transmit credentials in plain text (such as PLAIN), this means plain-text passwords briefly exist in the proxy’s memory. The PLAIN mechanism is disabled by default for this reason.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="oauthbearer_validation_2">3.4. OAuthBearer Validation</h3>
+     <div class="paragraph">
+      <p>Use OAuthBearer Validation when:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Your Kafka clients authenticate using OAuth 2.0 bearer tokens (the <code>OAUTHBEARER</code> SASL mechanism).</p>
+       </li>
+       <li>
+        <p>You want the proxy to reject clients with invalid or expired tokens before their application requests are forwarded to the broker.</p>
+       </li>
+       <li>
+        <p>You want to reduce load on the broker from repeated invalid authentication attempts.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>This mode requires a reachable JWKS endpoint that provides the public keys used to verify JWT signatures.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_termination_2">3.5. SASL Termination</h3>
+     <div class="paragraph">
+      <p>Use SASL Termination when:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>You want the proxy to be the sole authority for client authentication, fully decoupling it from the broker.</p>
+       </li>
+       <li>
+        <p>You need to ensure that only authenticated clients' application requests are forwarded to the broker.</p>
+       </li>
+       <li>
+        <p>Your Kafka clients authenticate using the <code>OAUTHBEARER</code>, <code>SCRAM-SHA-256</code>, or <code>SCRAM-SHA-512</code> SASL mechanism.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Authenticating clients at the proxy means that every broker feature which depends on client identity needs to be reconsidered:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><strong>Authorization:</strong> The broker sees application requests as coming from the proxy, not from the original client. You can move authorization responsibility to the proxy using the <code>Authorization</code> filter, or you can update your broker’s authorization configuration so that the proxy’s identity is authorized appropriately.</p>
+       </li>
+       <li>
+        <p><strong>Audit logging:</strong> Broker-side audit logs record the proxy’s identity, not the original client’s identity. If you need client-level audit trails, you need to rely on proxy-side logging.</p>
+       </li>
+       <li>
+        <p><strong>Quotas:</strong> Broker-side quotas apply to the proxy’s identity, not to individual clients. If you need per-client quota enforcement, you need to implement it at the proxy level.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Consider the following:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>The proxy validates credentials directly and does not forward SASL exchanges to the broker. The broker does not need to be configured for SASL authentication at all, or it can use a different authentication mechanism for other clients.</p>
+       </li>
+       <li>
+        <p>Delegation Token APIs (<code>CreateDelegationToken</code>, <code>RenewDelegationToken</code>, <code>ExpireDelegationToken</code>, <code>DescribeDelegationToken</code>) are not available to clients when SASL is terminated at the proxy, because these APIs depend on a broker-side SASL session.</p>
+       </li>
+       <li>
+        <p>SCRAM credential management APIs (<code>AlterUserScramCredentials</code>, <code>DescribeUserScramCredentials</code>) are not available to clients when SCRAM is terminated at the proxy. SCRAM credentials must be managed using the SCRAM credential tool instead.</p>
+       </li>
+       <li>
+        <p>Unlike SASL Passthrough Inspection, SASL Termination enforces authentication at the proxy: clients that fail authentication are rejected before their application requests are forwarded to the broker.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Infrastructure requirements depend on the mechanism: <code>OAUTHBEARER</code> requires a reachable JWKS endpoint that provides the public keys used to verify JWT signatures; <code>SCRAM-SHA-256</code> and <code>SCRAM-SHA-512</code> require a credential store containing SCRAM credentials for your users.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="combining_approaches">3.6. Combining approaches</h3>
+     <div class="paragraph">
+      <p>mTLS and SASL authentication are not mutually exclusive. You can configure both on the same virtual cluster:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>The transport subject builder creates an initial authenticated subject from the TLS client certificate.</p>
+       </li>
+       <li>
+        <p>If SASL Passthrough Inspection or OAuthBearer Validation is also configured, the SASL subject builder replaces the subject after successful SASL authentication.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>This can be useful when you want transport-level identity as a baseline and application-level identity for fine-grained access control.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 2. Summary of authentication approaches</caption>
+      <colgroup>
+       <col style="width: 20%;">
+       <col style="width: 20%;">
+       <col style="width: 20%;">
+       <col style="width: 20%;">
+       <col style="width: 20%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Approach</th>
+        <th class="tableblock halign-left valign-top">Proxy knows client identity</th>
+        <th class="tableblock halign-left valign-top">Proxy validates credentials</th>
+        <th class="tableblock halign-left valign-top">Requires filter configuration</th>
+        <th class="tableblock halign-left valign-top">Additional infrastructure</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">mTLS</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (from certificate)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (certificate validation)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No (configured on virtual cluster)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">PKI for client certificates</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">SASL Passthrough</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No (default)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">None</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">SASL Passthrough Inspection</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (from SASL exchange)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No (broker decides)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (<code>SaslInspection</code> filter)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">None</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">OAuthBearer Validation</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (from JWT token)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (token validation)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (<code>OauthBearerValidation</code> filter)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">JWKS endpoint</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">SASL Termination</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (from SASL exchange)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (proxy validates directly)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Yes (<code>SaslTermination</code> filter)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">JWKS endpoint (OAUTHBEARER) or SCRAM credential store (SCRAM)</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-choosing-sasl-mechanism-authentication">4. Choosing a SASL mechanism</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>When configuring SASL authentication, the choice of mechanism affects the security properties, infrastructure requirements, and operational characteristics of your deployment. This section compares the PLAIN, SCRAM, and OAUTHBEARER mechanisms across several security and operational dimensions to help you make an informed choice.</p>
+    </div>
+    <div class="paragraph">
+     <p>The choice of SASL mechanism is independent of the choice of <a href="#con-choosing-authentication-approach-authentication">authentication approach</a> (Passthrough, Inspection, Termination, or OAuthBearer Validation). However, some authentication approaches constrain the available mechanisms. For information about the mechanisms supported by each authentication approach, see <a href="#con-choosing-authentication-approach-authentication">Choosing an authentication approach</a></p>
+    </div>
+    <div class="paragraph">
+     <p>This section uses <em>server</em> to refer to whichever component performs SASL authentication — either the Kafka broker or the Kroxylicious proxy, depending on your authentication approach. Where a point applies specifically to Apache Kafka brokers or to the proxy, the more specific term is used.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="mechanism_overview">4.1. Mechanism overview</h3>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">PLAIN</dt>
+       <dd>
+        <p>The client sends a username and password in plain text within the SASL exchange. The security of the credentials depends entirely on the TLS layer protecting the connection. PLAIN is defined in <a href="https://tools.ietf.org/html/rfc4616">RFC 4616</a>.</p>
+       </dd>
+       <dt class="hdlist1">SCRAM-SHA-256 and SCRAM-SHA-512</dt>
+       <dd>
+        <p>The Salted Challenge Response Authentication Mechanism (SCRAM) authenticates the client using a challenge-response protocol. The client proves knowledge of the password without transmitting it. SCRAM is defined in <a href="https://datatracker.ietf.org/doc/html/rfc5802">RFC 5802</a>, with the SHA-256 variant specified in <a href="https://datatracker.ietf.org/doc/html/rfc7677">RFC 7677</a>.</p>
+       </dd>
+       <dt class="hdlist1">OAUTHBEARER</dt>
+       <dd>
+        <p>The client presents an OAuth 2.0 bearer token (typically a JWT) obtained from an authorization server. Bearer tokens are typically short-lived, limiting the window of exploitation if a token is intercepted. The server validates the token using public keys retrieved from a JWKS endpoint, without requiring the client to send a password. OAUTHBEARER is defined in <a href="https://datatracker.ietf.org/doc/html/rfc7628">RFC 7628</a>.</p>
+       </dd>
+      </dl>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="security_considerations">4.2. Security considerations</h3>
+     <div class="sect3">
+      <h4 id="protection_against_tls_termination_and_middlebox_compromise">4.2.1. Protection against TLS termination and middlebox compromise</h4>
+      <div class="paragraph">
+       <p><strong>Threat:</strong> An attacker controls or has access to a TLS-terminating component such as a reverse proxy, API gateway, load balancer, or network monitoring appliance.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>The plain-text password is visible to any component that terminates TLS before the authentication server. An attacker with access to such a component can capture credentials directly.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>The password is never transmitted, even within the TLS session. The SASL exchange contains only nonces and HMAC proofs, so an attacker with access to a TLS-terminating middlebox cannot extract the password from the SASL messages.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>The bearer token is transmitted within the TLS session, similar to PLAIN. However, bearer tokens are typically short-lived, which limits the window during which a captured token can be replayed. The user’s underlying credentials (such as a username and password used to obtain the token from the authorization server) are not exposed.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="protection_against_rogue_servers_and_man_in_the_middle_attacks">4.2.2. Protection against rogue servers and man-in-the-middle attacks</h4>
+      <div class="paragraph">
+       <p><strong>Threat:</strong> An attacker impersonates the server or interposes between the client and server, for example, by using a compromised internal CA or a malicious proxy certificate.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>No protection at the SASL layer. The client sends the password to whatever server terminates TLS. Correctly configured TLS (with proper certificate validation and trusted CAs) is an adequate mitigation of this risk, because TLS itself verifies the identity of the server before any credentials are sent.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM (without channel binding)</dt>
+        <dd>
+         <p>SCRAM provides <em>mutual authentication</em>: the server must prove possession of the user’s <code>ServerKey</code> before authentication completes. This prevents a rogue server that does not possess the correct <code>ServerKey</code> from completing the SCRAM handshake.</p>
+         <div class="paragraph">
+          <p>The SCRAM standard defines channel binding variants (such as <code>SCRAM-SHA-256-PLUS</code>) that can detect a TLS-terminating man-in-the-middle. However, <strong>Apache Kafka does not support SCRAM channel binding variants</strong>. Without channel binding, a man-in-the-middle that proxies the full SCRAM exchange between the genuine client and genuine server is not detected.</p>
+         </div>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>The token is sent to whatever server terminates TLS. The token does not reveal the user’s underlying credentials, and the short lifetime of an individual token limits the impact of a single interception. However, if the rogue server remains undetected, it can capture successive tokens over time and maintain ongoing access.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="cross_service_token_replay">4.2.3. Cross-service token replay</h4>
+      <div class="paragraph">
+       <p><strong>Threat:</strong> An attacker obtains a valid bearer token (for example, from application logs, a compromised service, or a TLS-terminating middlebox) and presents it to a different service to gain unauthorized access.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>Not applicable. Passwords are not scoped to a particular service, so a stolen password grants access to any service where the same credentials are accepted.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>Not applicable. SCRAM credentials are service-specific by design: the derived keys are computed with a salt chosen by the server, so credentials stolen from one service cannot be replayed against another.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>Bearer tokens can include an <code>aud</code> (audience) claim that identifies the intended recipient. If the server is configured to validate the audience, it rejects tokens that were issued for a different service.</p>
+         <div class="paragraph">
+          <p>To protect against cross-service replay, configure a unique audience value for your Kafka deployment and ensure that both the authorization server and the server enforce it. Tokens issued without an audience claim, or with an overly broad audience, can be replayed against any service that accepts them.</p>
+         </div>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="protection_against_credential_database_theft">4.2.4. Protection against credential database theft</h4>
+      <div class="paragraph">
+       <p><strong>Threat:</strong> An attacker gains access to the authentication credential store on the server.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>The server must be able to verify the plain-text password. In principle, a server could store passwords using a strong hashing algorithm, but Apache Kafka currently stores PLAIN credentials as a plain-text username/password mapping in the broker configuration. An attacker who gains access to the broker configuration obtains all passwords directly.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>The server stores derived keys (<code>StoredKey</code> and <code>ServerKey</code>) computed using PBKDF2. An attacker who obtains these derived keys cannot directly authenticate as the client — <code>StoredKey</code> is a one-way hash of <code>ClientKey</code>, so producing a valid authentication proof requires an offline attack to reverse the hash. The attacker can, however, impersonate the <em>server</em> using <code>ServerKey</code>. Crucially, the original password cannot be recovered from the stored keys, which prevents credential-stuffing attacks against other services where the user may have reused the same password.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>The server does not store user passwords. It stores only the public keys (via JWKS) used to verify token signatures. Theft of the JWKS public keys does not allow an attacker to generate valid tokens or recover user credentials. The credential store is maintained by the authorization server, not the server.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="resistance_to_password_recovery_from_stolen_credentials">4.2.5. Resistance to password recovery from stolen credentials</h4>
+      <div class="paragraph">
+       <p><strong>Threat:</strong> An attacker who has stolen the credential store attempts to recover user passwords, either directly or through offline brute-force and dictionary attacks.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p><strong>None.</strong> Apache Kafka currently stores PLAIN credentials in plain text, so an attacker who obtains the credential store has immediate access to all passwords with no cracking required.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p><strong>Moderate.</strong> The SCRAM protocol (<a href="https://datatracker.ietf.org/doc/html/rfc5802">RFC 5802</a> / <a href="https://datatracker.ietf.org/doc/html/rfc7677">RFC 7677</a>) mandates PBKDF2 for key derivation, so an attacker must perform an offline brute-force or dictionary attack to recover passwords. However, PBKDF2 lacks memory hardness, which makes GPU-based cracking significantly faster compared to memory-hard algorithms such as Argon2id or bcrypt. The PBKDF2 iteration count can be increased to raise the cost of cracking, but this also increases the cost of legitimate authentication.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p><strong>Not applicable.</strong> The server does not store passwords; it stores only the public keys used to verify token signatures. Resistance to password recovery depends entirely on the authorization server’s credential storage practices.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="operational_considerations">4.3. Operational considerations</h3>
+     <div class="sect3">
+      <h4 id="external_identity_provider_compatibility">4.3.1. External identity provider compatibility</h4>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>Because the server receives the raw password, it can forward the password to any external authentication backend such as LDAP, Active Directory, or PAM. This makes PLAIN the most flexible mechanism for integration with legacy or third-party identity infrastructure.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>SCRAM requires the server to store SCRAM-specific derived keys (<code>StoredKey</code>, <code>ServerKey</code>, salt, and iteration count). External identity directories such as LDAP or Active Directory do not natively store SCRAM derivation keys, making integration with these backends difficult.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>Designed for integration with external identity providers. The authorization server handles user authentication and can integrate with LDAP, Active Directory, social identity providers, multi-factor authentication, and other enterprise identity infrastructure. The server only needs to validate the resulting tokens.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="authentication_latency">4.3.2. Authentication latency</h4>
+      <div class="paragraph">
+       <p>Kafka uses long-lived connections, with authentication at connection establishment and occasional reauthentication. The additional latency from extra authentication round trips is small in this context and is not normally a paramount concern.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>Requires one round trip: the client sends credentials, and the server responds with success or failure.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>Requires two round trips for the challenge-response exchange (<code>client-first</code> → <code>server-first</code> → <code>client-final</code> → <code>server-final</code>). Over high-latency network links, this doubles the authentication negotiation time compared to PLAIN.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>Requires one round trip between the client and server. However, the client must first obtain a token from the authorization server, which adds latency before the Kafka connection is established. Token caching and refresh strategies can spread this cost across multiple connections.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="infrastructure_requirements">4.3.3. Infrastructure requirements</h4>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>No additional infrastructure beyond the server (or whatever backend the server delegates authentication to).</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>No additional infrastructure beyond the server. Credential management (creating and updating SCRAM credentials) is handled through Kafka’s built-in tooling.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>Requires an OAuth 2.0 authorization server and a JWKS endpoint for token validation. The availability of authentication depends on these services being reachable.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="reauthentication_and_credential_rotation">4.3.4. Reauthentication and credential rotation</h4>
+      <div class="paragraph">
+       <p>Kafka supports reauthentication on long-lived connections (<a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate">KIP-368</a>). When reauthentication is enabled, the broker tells the client when its session expires, and the client initiates a fresh SASL handshake on the existing connection before the session lifetime elapses.</p>
+      </div>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>The session lifetime is derived from the token’s expiry time. When reauthentication occurs, the client obtains a fresh token from the authorization server, so reauthentication also rotates the credential. If an earlier token was compromised, the new handshake uses a different token, limiting the window of exposure.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>The Kafka SCRAM implementation does not set a credential lifetime. Reauthentication occurs only if the broker’s <code>connections.max.reauth.ms</code> is configured, and the client re-sends the same password-derived proof. Because the underlying password does not change during reauthentication, credential rotation does not occur. An exception is SCRAM authentication using delegation tokens: the delegation token’s expiry time is used as the credential lifetime, and reauthentication behaves similarly to OAUTHBEARER.</p>
+        </dd>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>Like SCRAM, no credential lifetime is set. Reauthentication is driven solely by <code>connections.max.reauth.ms</code>, and the client re-sends the same username and password. No credential rotation occurs.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="implementation_and_parser_complexity">4.3.5. Implementation and parser complexity</h4>
+      <div class="dlist">
+       <dl>
+        <dt class="hdlist1">PLAIN</dt>
+        <dd>
+         <p>Trivially parsed (<code>\0username\0password</code>), minimizing the parser bug surface area.</p>
+        </dd>
+        <dt class="hdlist1">SCRAM</dt>
+        <dd>
+         <p>Requires cryptographic hashing, HMACs, nonce tracking, and a multi-step state machine. The SCRAM standard mandates SASLprep normalization of usernames and passwords, but Apache Kafka does not currently implement SASLprep. Incorrect implementations can introduce timing attacks or normalization bypasses.</p>
+        </dd>
+        <dt class="hdlist1">OAUTHBEARER</dt>
+        <dd>
+         <p>Requires JWT parsing, signature verification against JWKS, and validation of standard claims (expiry, audience, issuer). Client libraries must handle token acquisition and refresh.</p>
+        </dd>
+       </dl>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="when_to_use_each_mechanism">4.4. When to use each mechanism</h3>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Use PLAIN when</dt>
+       <dd>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p>You need to integrate with an external identity provider such as LDAP, Active Directory, or PAM, because the server receives the raw password and can forward it to any authentication backend.</p>
+          </li>
+          <li>
+           <p>You want the simplest possible SASL configuration with minimal client and server complexity.</p>
+          </li>
+          <li>
+           <p>You accept that credentials are only protected by the TLS layer and that credential rotation requires out-of-band password changes.</p>
+          </li>
+         </ul>
+        </div>
+       </dd>
+       <dt class="hdlist1">Use SCRAM when</dt>
+       <dd>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p>You want to protect credentials against TLS-terminating middleboxes or compromised TLS endpoints, because the password is never transmitted.</p>
+          </li>
+          <li>
+           <p>You do not need to integrate with external identity providers that lack SCRAM-specific credential storage.</p>
+          </li>
+          <li>
+           <p>You want protection against credential database theft, where the stored derived keys cannot be directly used to impersonate a client.</p>
+          </li>
+         </ul>
+        </div>
+       </dd>
+       <dt class="hdlist1">Use OAUTHBEARER when</dt>
+       <dd>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p>You have (or are willing to deploy) an OAuth 2.0 authorization server and JWKS endpoint.</p>
+          </li>
+          <li>
+           <p>You want automatic credential rotation through short-lived tokens, so that compromised credentials expire without manual intervention.</p>
+          </li>
+          <li>
+           <p>You need to integrate with enterprise identity infrastructure such as OpenID Connect, multi-factor authentication, or federated identity.</p>
+          </li>
+          <li>
+           <p>You want reauthentication to rotate the credential, not just re-verify the same one.</p>
+          </li>
+         </ul>
+        </div>
+       </dd>
+      </dl>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="summary_comparison">4.5. Summary comparison</h3>
+     <div class="paragraph">
+      <p>The following table summarizes how each mechanism addresses common threat vectors and operational considerations.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 3. Comparison of SASL mechanisms</caption>
+      <colgroup>
+       <col style="width: 33.3333%;">
+       <col style="width: 22.2222%;">
+       <col style="width: 22.2222%;">
+       <col style="width: 22.2223%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Consideration</th>
+        <th class="tableblock halign-left valign-top">PLAIN</th>
+        <th class="tableblock halign-left valign-top">SCRAM</th>
+        <th class="tableblock halign-left valign-top">OAUTHBEARER</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>TLS termination or middlebox intercepts credentials</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Password exposed in plain text</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Password never transmitted; only HMAC proofs cross the wire</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Bearer token exposed, but short-lived and does not reveal the user’s password</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Rogue server or man-in-the-middle</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No SASL-layer protection; correctly configured TLS mitigates this risk</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Mutual authentication prevents rogue servers without the correct <code>ServerKey</code>; however, Kafka does not support channel binding, so a proxying man-in-the-middle is not detected</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Token sent to any server; short token lifetime limits impact of a single interception, but a persistent rogue server can capture successive tokens</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Cross-service token replay</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Not applicable; stolen passwords work against any service that accepts them</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Not applicable; SCRAM credentials are service-specific by design</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Audience (<code>aud</code>) claim validation rejects tokens issued for a different service; configure a unique audience for your Kafka deployment</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Credential database theft</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Kafka stores PLAIN credentials in plain text; all passwords exposed directly</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Derived keys do not allow direct client impersonation; original password cannot be recovered, preventing credential reuse attacks</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No passwords stored on the server; only public keys for token verification</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Resistance to password recovery</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">None; Kafka stores PLAIN credentials in plain text</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Moderate; PBKDF2 requires offline cracking but lacks memory hardness</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Not applicable; server does not store passwords</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Reauthentication and credential rotation</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No credential rotation; reauthentication re-sends the same password and is driven solely by <code>connections.max.reauth.ms</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">No credential rotation; reauthentication re-sends the same password-derived proof and is driven solely by <code>connections.max.reauth.ms</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Credential rotation on every reauthentication; the client obtains a fresh token, so compromised tokens expire naturally</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>External identity provider integration</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">High compatibility; raw password can be forwarded to LDAP, Active Directory, or PAM</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Low compatibility; requires SCRAM-specific credential storage</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">High compatibility; designed for OAuth 2.0 and OpenID Connect identity providers</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Authentication latency</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">1 round trip</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">2 round trips</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">1 round trip (plus prior token acquisition from authorization server)</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><strong>Infrastructure requirements</strong></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">None beyond the server</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">None beyond the server</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">OAuth 2.0 authorization server and JWKS endpoint</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-subjects-and-subject-builders-authentication">5. Understanding subjects and subject builders</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>When the proxy authenticates a client, it constructs an <em>authenticated subject</em> that represents the client’s identity. This subject is made available to filters in the proxy chain so that they can make decisions based on who the client is.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="subjects_and_principals">5.1. Subjects and principals</h3>
+     <div class="paragraph">
+      <p>A subject contains a set of <em>principals</em>. Each principal is a named identifier that represents one aspect of the client’s identity. For example, a principal might represent a user name, an email address, or a group membership.</p>
+     </div>
+     <div class="paragraph">
+      <p>A subject may contain at most one <code>User</code> principal, which represents the primary identity of the client.</p>
+     </div>
+     <div class="paragraph">
+      <p>If no authentication is configured, or if authentication has not yet completed, the subject is <em>anonymous</em> — it contains no principals.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="subject_builders">5.2. Subject builders</h3>
+     <div class="paragraph">
+      <p>Subject builders are responsible for constructing the authenticated subject from information obtained during authentication. The proxy provides two types of subject builder, corresponding to the two authentication mechanisms:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Transport subject builder</dt>
+       <dd>
+        <p>Builds a subject from information in the client’s TLS certificate. The transport subject builder runs after the TLS handshake completes and has access to the client certificate’s distinguished name (DN) and subject alternative names (SANs).</p>
+        <div class="paragraph">
+         <p>The transport subject builder is configured on the virtual cluster. See <a href="#con-configuring-vc-transport-subject-builder-authentication">Configuring the transport subject builder</a> for configuration details.</p>
+        </div>
+       </dd>
+       <dt class="hdlist1">SASL subject builder</dt>
+       <dd>
+        <p>Builds a subject from information obtained during a successful SASL authentication exchange, such as the SASL authorization ID.</p>
+        <div class="paragraph">
+         <p>The SASL subject builder is configured on the SASL filter (for example, the <code>SaslInspection</code> filter). See <a href="#con-configuring-sasl-subject-builder-authentication">Configuring SASL subject builder</a> for configuration details.</p>
+        </div>
+       </dd>
+      </dl>
+     </div>
+     <div class="paragraph">
+      <p>Both subject builders use a pluggable architecture. The default implementations extract principals from certificate fields or SASL authorization IDs using configurable mapping rules. Custom implementations can augment the subject with information looked up from external trusted systems, such as a directory service (for example, ActiveDirectory or LDAP), to add additional principals representing roles or group memberships.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="subject_lifecycle">5.3. Subject lifecycle</h3>
+     <div class="paragraph">
+      <p>The authenticated subject evolves through the connection lifecycle:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p><strong>TLS handshake</strong> — If a transport subject builder is configured and the client presents a TLS certificate, the builder creates the initial subject. If no transport subject builder is configured, or if TLS client authentication is not enabled, the subject starts as anonymous.</p>
+       </li>
+       <li>
+        <p><strong>SASL authentication</strong> — If a SASL-aware filter (such as the <code>SaslInspection</code> filter) is configured and the client authenticates successfully via SASL, the SASL subject builder creates a new subject that <em>replaces</em> the transport subject.</p>
+       </li>
+       <li>
+        <p><strong>Re-authentication</strong> — Kafka supports re-authentication (<a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate">KIP-368</a>). When a client re-authenticates, the SASL subject builder creates a new subject that replaces the previous one.</p>
+       </li>
+       <li>
+        <p><strong>Authentication failure</strong> — If SASL authentication fails, the subject reverts to anonymous.</p>
+       </li>
+      </ol>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-client-mtls-authentication">6. Configuring client mutual TLS (mTLS)</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>To use mTLS for client authentication, configure TLS on the virtual cluster gateway with a trust store containing the CA certificates that the proxy uses to validate client certificates.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+      <li>
+       <p>A server certificate for the virtual cluster gateway.</p>
+      </li>
+      <li>
+       <p>A trust store containing the CA certificates used to sign client certificates.</p>
+      </li>
+      <li>
+       <p>Client certificates issued by a trusted CA for each Kafka client that needs to authenticate.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="sect2">
+     <h3 id="con-configuring-vc-client-tls-authentication">6.1. Securing connections from clients</h3>
+     <div class="paragraph _abstract">
+      <p>To secure client connections to virtual clusters, configure TLS within the virtual cluster gateway by doing the following:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Obtain a server certificate for the virtual cluster from a Certificate Authority (CA).
+         <br>
+         Ensure the certificate matches the names of the virtual cluster gateway’s bootstrap and broker addresses.
+         <br>
+         This may require wildcard certificates and Subject Alternative Names (SANs).</p>
+       </li>
+       <li>
+        <p>Provide the TLS configuration using the <code>tls</code> properties in the virtual cluster gateway’s configuration to enable it to present the certificate to clients. Depending on your certificate format, apply one of the following examples.</p>
+       </li>
+       <li>
+        <p>For mutual TLS, use the <code>trust</code> properties to configure the virtual cluster gateway to use TLS client authentication.</p>
+       </li>
+       <li>
+        <p>If required, you can restrict the TLS protocols and cipher suites that are used to form the TLS connection.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Examples below illustrate how these steps may be done.</p>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">TLS is recommended for production configurations.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example applying a PKCS #12 server certificate to a virtual cluster gateway</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="comment"># ...</span>
+<span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="key">key</span>:
+          <span class="key">storeFile</span>: <span class="string"><span class="content">&lt;path&gt;/server.p12</span></span>
+          <span class="key">storePassword</span>:
+            <span class="key">passwordFile</span>: <span class="string"><span class="content">&lt;path&gt;/store.password</span></span>
+          <span class="key">keyPassword</span>:
+            <span class="key">passwordFile</span>: <span class="string"><span class="content">&lt;path&gt;/key.password</span></span>
+          <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+<span class="comment"># ...</span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> refers to a PKCS #12 store file containing the private-key and certificate/intermediates of the virtual cluster gateway.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>storePassword</code> defines the password used decrypt the store file. Omit the <code>storePassword</code> field if the store is not password protected.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>passwordFile</code> Password to protect the PKCS #12 store.</p>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>keyPassword</code> defines the password used decrypt the key.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>passwordFile</code> refers to a file containing the password for the key. If a password is not specified, the <code>storePassword</code> is used to decrypt the key too.</p>
+             </li>
+            </ul>
+           </div>
+          </li>
+         </ul>
+        </div>
+       </li>
+       <li>
+        <p><code>storeType</code> identifies the keystore type. If a keystore type is not specified, the default JKS (Java Keystore) type is used.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example applying a PEM server certificate and key pair to a virtual cluster gateway</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="comment"># ...</span>
+<span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="key">key</span>:
+          <span class="key">privateKeyFile</span>: <span class="string"><span class="content">&lt;path&gt;/server.key</span></span>
+          <span class="key">certificateFile</span>: <span class="string"><span class="content">&lt;path&gt;/server.crt</span></span>
+          <span class="key">keyPassword</span>:
+            <span class="key">passwordFile</span>: <span class="string"><span class="content">&lt;path&gt;/key.password</span></span>
+<span class="comment"># ...</span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>privateKeyFile</code> refers to a private key of the virtual cluster gateway.</p>
+       </li>
+       <li>
+        <p><code>certificateFile</code> refers to a public certificate of the virtual cluster gateway.</p>
+       </li>
+       <li>
+        <p><code>keyPassword</code> defines the password used decrypt the private key. If the private key file is not encrypted, omit the <code>keyPassword</code> field.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>passwordFile</code> <code>passwordFile</code> refers to a file containing the password for the key.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>You can configure the virtual cluster gateway to require that clients present a certificate for authentication. The virtual cluster gateway verifies that the client’s certificate is signed by one of the CA certificates contained in a trust store. If verification fails, the client’s connection is refused.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example applying TLS client authentication using a PKCS #12 truststore</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="comment"># ...</span>
+<span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="key">key</span>:
+           <span class="comment"># ...</span>
+        <span class="key">trust</span>:
+          <span class="key">storeFile</span>: <span class="string"><span class="content">&lt;path&gt;/trust.p12</span></span>
+          <span class="key">storePassword</span>:
+            <span class="key">passwordFile</span>: <span class="string"><span class="content">&lt;path&gt;/trust.password</span></span>
+          <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+          <span class="key">trustOptions</span>:
+            <span class="key">clientAuth</span>: <span class="string"><span class="content">REQUIRED</span></span>
+<span class="comment"># ...</span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> refers to a PKCS #12 store file containing the private-key and certificate/intermediates of the virtual cluster gateway.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>storePassword</code> defines the password used decrypt the store file. Omit the <code>storePassword</code> field if the store is not password protected.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>passwordFile</code> Password to protect the PKCS #12 store.</p>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>keyPassword</code> defines the password used decrypt the key.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>passwordFile</code> refers to a file containing the password for the key. If a password is not specified, the <code>storePassword</code> is used to decrypt the key too.</p>
+             </li>
+            </ul>
+           </div>
+          </li>
+         </ul>
+        </div>
+       </li>
+       <li>
+        <p><code>storeType</code> identifies the keystore type. If a keystore type is not specified, the default JKS (Java Keystore) type is used.</p>
+       </li>
+       <li>
+        <p><code>clientAuth</code> specifies the client authentication mode. If set to <code>REQUIRED</code>, the client must present a valid certificate. If set to <code>REQUESTED</code>, the client is requested to present a certificate. If presented, the certificate is validated. If the client chooses not to present a certificate the connection is still allowed. If set to <code>NONE</code>, client authentication is disabled. If a client authentication mode is not specified, then the default behaviour is <code>REQUIRED</code>.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">The client’s identity, as established through TLS client authentication, is currently not relayed to the target cluster. For more information, see the <a href="https://github.com/kroxylicious/kroxylicious/issues/1637" target="_blank" rel="noopener">related issue</a>.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>You can restrict the TLS protocols by specifying either an allow list of TLS protocols to be enabled, or a deny list of TLS protocols to be disallowed from the platform’s default. If both an allow and a deny list are specified, the resulting list of TLS protocols includes only those protocols from the allow list that are not in the deny list. If neither list is specified, the virtual cluster uses the default TLS protocols provided by the platform.</p>
+     </div>
+     <div class="paragraph">
+      <p>When the client connects, it negotiates the highest mutually acceptable TLS protocol with the virtual cluster. If the two have no protocols in common, the connection fails.</p>
+     </div>
+     <div class="paragraph">
+      <p>The names of the TLS protocols are defined by <a href="https://docs.oracle.com/en/java/javase/17/docs/specs/security/standard-names.html#sslcontext-algorithms">Java specification</a>.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example restricting TLS protocols using an allow list</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="comment"># ...</span>
+        <span class="key">protocols</span>:
+          <span class="key">allowed</span>:
+          - <span class="string"><span class="content">TLSv1.3</span></span>
+          - <span class="string"><span class="content">TLSv1.2</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>protocols</code> configures the TLS protocols</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>allowed</code> lists the allowed TLS protocols.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example restricting TLS protocols using a deny list</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="comment"># ...</span>
+        <span class="key">protocols</span>:
+          <span class="key">denied</span>:
+          - <span class="string"><span class="content">TLSv1.1</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>protocols</code> configures the TLS protocols</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>denied</code> lists the disallowed TLS protocols.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>You can restrict the TLS cipher suite by specifying either an allow list of cipher suites to be enabled, in preference order, or a deny list of ciphers suites to be disallowed from the platform’s default. If both an allow and a deny list are specified, the resulting list of cipher suites includes only those ciphers from the allow list that are not in the deny list. If neither list is specified, the virtual cluster uses the default cipher suites (and preference order) provided by the platform.</p>
+     </div>
+     <div class="paragraph">
+      <p>When the client connects, it negotiates the most preferred mutually acceptable cipher suite with the virtual cluster. If the two have no cipher suites in common, the connection fails.</p>
+     </div>
+     <div class="paragraph">
+      <p>The names of the cipher suite are defined by <a href="https://docs.oracle.com/en/java/javase/17/docs/specs/security/standard-names.html#jsse-cipher-suite-names">Java specification</a>.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example restricting cipher suites using an allow list</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="comment"># ...</span>
+        <span class="key">cipherSuites</span>:
+          <span class="key">allowed</span>:
+          - <span class="string"><span class="content">TLS_ECDHE_ECDSA_WITH_AES_256_CCM</span></span>
+          - <span class="string"><span class="content">TLS_ECDHE_ECDSA_WITH_AES_128_CCM</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>cipherSuites</code> configures the cipher suites.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>allowed</code> lists the cipher suites which are permitted in preference order.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example restricting cipher suites using a deny list</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">gateways</span>:
+    - <span class="string"><span class="content">name: mygateway</span></span>
+      <span class="comment"># ...</span>
+      <span class="key">tls</span>:
+        <span class="comment"># ...</span>
+        <span class="key">cipherSuites</span>:
+          <span class="key">denied</span>:
+          - <span class="string"><span class="content">TLS_KRB5_WITH_3DES_EDE_CBC_MD5</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>cipherSuites</code> configures the cipher suites.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>denied</code> lists the disallowed cipher suites.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-configuring-vc-transport-subject-builder-authentication">7. Configuring the transport subject builder</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Some filters require the verified identity of the client, derived from successful authentication. This identity is called the authenticated subject.</p>
+    </div>
+    <div class="paragraph">
+     <p>For applications that use TLS client authentication, the virtual cluster can build the authenticated subject from information in the TLS client certificate presented to the proxy.</p>
+    </div>
+    <div class="paragraph">
+     <p>The transport subject builder controls how certificate information is turned into principals within the authenticated subject. For example, you can build a principal from parts of the X500 principal. A typical use case is mapping a distinguished name such as <code>CN=myapp,OU=dev,O=kroxylicious.io,C=US</code> to <code>myapp</code>.</p>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">For applications that use SASL authentication, see the <a href="../authentication-guide/">Client Authentication guide</a> for information on building the authenticated subject from a successful client–broker SASL authentication.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="configuration">7.1. Configuration</h3>
+     <div class="paragraph">
+      <p>The following example shows configuration for the transport subject builder:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="comment"># ...</span>
+<span class="key">virtualClusters</span>:
+  - <span class="string"><span class="content">name: my-cluster-proxy</span></span>
+    <span class="comment"># ...</span>
+    <span class="key">subjectBuilder</span>:
+      <span class="key">type</span>: <span class="string"><span class="content">DefaultTransportSubjectBuilderService</span></span>
+      <span class="key">config</span>:
+        <span class="key">addPrincipals</span>:
+          - <span class="string"><span class="content">from: &lt;field name&gt;</span></span>
+            <span class="key">map</span>:
+              - <span class="string"><span class="content">replaceMatch: &lt;match replace flags 1&gt;</span></span>
+              - <span class="comment"># ...</span>
+              - <span class="string"><span class="content">replaceMatch: &lt;match replace flags n&gt;</span></span>
+              - <span class="string"><span class="content">else: identity|anonymous</span></span>
+            <span class="key">principalFactory</span>: <span class="string"><span class="content">&lt;principal factory&gt;</span></span>
+        <span class="comment"># - from: ...</span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>&lt;field name&gt;</code> identifies the field to extract. Valid field names are listed in the <strong>Supported fields</strong> table.</p>
+       </li>
+       <li>
+        <p><code>&lt;match replace flags 1&gt;</code>…​<code>&lt;match replace flags n&gt;</code> define a set of replacement matchers used to match and transform the field value.</p>
+       </li>
+       <li>
+        <p><code>else</code> defines the behavior when none of the replacement matchers match the field value. <code>identity</code> generates a principal based on the original (unmapped) field value. <code>anonymous</code> generates an anonymous principal.</p>
+       </li>
+       <li>
+        <p><code>&lt;principal factory&gt;</code> the name of a <code>PrincipalFactory</code> implementation. Currently, only <code>UserFactory</code> is supported.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Field values are tested against the replacement matchers in the order they are configured. The first matcher that matches the field value generates the principal. After a successful match, remaining matchers for that field are ignored.</p>
+     </div>
+     <div class="paragraph">
+      <p>If no matcher matches, the outcome is defined by the <code>else</code> clause. If there is no match and no <code>else</code> cause is provided, no principal is generated for this field.</p>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">Currently, the subject builder is restricted to producing a subject containing at most one user principal.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="supported_fields">7.2. Supported fields</h3>
+     <table class="tableblock frame-all grid-all stretch">
+      <colgroup>
+       <col style="width: 50%;">
+       <col style="width: 50%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Field name</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">clientTlsSubject</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">X500 Principal</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">clientTlsSanRfc822Name</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Email address from the Subject Alternate Names</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">clientTlsSanDirName</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">DirName from the Subject Alternate Names</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">clientTlsSanDnsName</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">DNSName from the Subject Alternate Names</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">clientTlsSanUri</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">URI from the Subject Alternate Names</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="replacement_matchers">7.3. Replacement matchers</h3>
+     <div class="paragraph">
+      <p>Replacement matchers control how field values are matched and transformed. A replacement matcher is defined using this format:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>/&lt;matching regular expression&gt;/&lt;replacement&gt;/&lt;flags&gt;</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>&lt;matching regular expression&gt;</code> is the regular expression used to test the field value.</p>
+       </li>
+       <li>
+        <p><code>&lt;replacement&gt;</code> defines the replacement value to use when the regular expression is matched. The replacement can use back references (<code>$1</code> etc) to refer to capturing groups defined within the regular expression.</p>
+       </li>
+       <li>
+        <p><code>&lt;flags&gt;</code> (optional) can be either <code>L</code> or <code>U</code> for lower or upper-casing respectively. The case transformation is applied to the replacement value after any back reference resolution.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-configuring-sasl-passthrough-authentication">8. Configuring SASL Passthrough</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>SASL Passthrough is the default SASL authentication mode. No explicit configuration is required to enable it.</p>
+    </div>
+    <div class="paragraph">
+     <p>When no SASL-related filter (such as <code>SaslInspection</code> or <code>OauthBearerValidation</code>) is configured in the filter chain, the proxy forwards all <code>SaslHandshake</code> and <code>SaslAuthenticate</code> requests from the client to the broker and relays the broker’s responses back to the client without inspecting or modifying them.</p>
+    </div>
+    <div class="paragraph">
+     <p>If your Kafka clients and brokers are already configured with SASL authentication, the proxy forwards the SASL exchange transparently. The client authenticates with the broker exactly as it would without the proxy.</p>
+    </div>
+    <div class="paragraph">
+     <p>In this mode, the authenticated subject remains anonymous. The proxy does not know the client’s identity and cannot make per-client decisions or log identity information. If you need the proxy to be aware of the client’s identity, configure either <a href="#assembly-configuring-authentication-sasl-inspection-auth-sasl-inspection">SASL Passthrough Inspection</a> or <a href="#assembly-configuring-authentication-oauthbearer-auth-oauthbearer">OAuthBearer Validation</a>.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-authentication-sasl-inspection-auth-sasl-inspection">9. Configuring SASL Passthrough Inspection</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>To enable SASL Passthrough Inspection, configure a <code>SaslInspection</code> filter in the proxy’s filter chain. This filter observes the SASL authentication exchange between client and broker and extracts the client’s authorization ID. The broker remains the authority for authentication decisions.</p>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">The SASL Inspection filter plays no part in deciding if the authentication is successful or not. That role remains the exclusive responsibility of the broker.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+      <li>
+       <p>The Kafka cluster’s listener must be configured to authenticate using SASL with a mechanism supported by this filter.</p>
+      </li>
+     </ul>
+    </div>
+    <table id="supported-mechanisms-auth-sasl-inspection" class="tableblock frame-all grid-all stretch">
+     <caption class="title">Table 4. Supported SASL mechanisms for inspection</caption>
+     <colgroup>
+      <col style="width: 50%;">
+      <col style="width: 50%;">
+     </colgroup>
+     <thead>
+      <tr>
+       <th class="tableblock halign-left valign-top">SASL mechanism</th>
+       <th class="tableblock halign-left valign-top">Enabled by default</th>
+      </tr>
+     </thead>
+     <tbody>
+      <tr>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock"><a href="https://tools.ietf.org/html/rfc4616">PLAIN</a></p>
+       </td>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock">No</p>
+       </td>
+      </tr>
+      <tr>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock"><a href="https://datatracker.ietf.org/doc/html/rfc7677">SCRAM-SHA-256</a></p>
+       </td>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock">Yes</p>
+       </td>
+      </tr>
+      <tr>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock"><a href="https://datatracker.ietf.org/doc/html/draft-melnikov-scram-sha-512-00">SCRAM-SHA-512</a></p>
+       </td>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock">Yes</p>
+       </td>
+      </tr>
+      <tr>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock"><a href="https://datatracker.ietf.org/doc/html/rfc7628">OAUTHBEARER</a></p>
+       </td>
+       <td class="tableblock halign-left valign-top">
+        <p class="tableblock">Yes</p>
+       </td>
+      </tr>
+     </tbody>
+    </table>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure a <code>SaslInspection</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-auth-sasl-inspection">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-auth-sasl-inspection">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-auth-sasl-inspection">9.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>filterDefinitions</code> entry configured for SASL inspection:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-sasl-inspection-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">SaslInspection</span></span>
+    <span class="key">config</span>:
+      <span class="key">enabledMechanisms</span>: <span class="string"><span class="content">[ "OAUTHBEARER" ]</span></span>
+      <span class="key">requireAuthentication</span>: <span class="string"><span class="content">true</span></span>
+      <span class="key">subjectBuilder</span>: <span class="string"><span class="content">&lt;class name&gt;</span></span>
+      <span class="key">subjectBuilderConfig</span>: <span class="string"><span class="content">&lt;object providing configuration for the subject builder&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>enabledMechanisms</code> restricts the filter to the given SASL mechanism(s). Refer to SASL mechanism by its name given in the <a href="#supported-mechanisms-auth-sasl-inspection">supported mechanisms</a> table. If omitted, the SASL mechanisms <code>SCRAM-SHA-256</code>, <code>SCRAM-SHA-512</code> and <code>OAUTHBEARER</code> will be enabled by default.</p>
+       </li>
+       <li>
+        <p>if <code>requireAuthentication</code> is true, a successful authentication is required before the filter forwards any requests other than those strictly required to perform SASL authentication. If false then the filter will forward all requests regardless of whether SASL authentication has been attempted or was successful. Defaults to false.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilder</code> is the name of a plugin class implementing <code>io.kroxylicious.proxy.authentication.SaslSubjectBuilderService</code>. If omitted, a default subject builder creates a principal with name matching the SASL authorized ID.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilderConfig</code> provides subject builder configuration.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-auth-sasl-inspection">9.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for SASL inspection:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-sasl-inspection-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">SaslInspection</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">enabledMechanisms</span>: <span class="string"><span class="content">[ "OAUTHBEARER" ]</span></span>
+    <span class="key">requireAuthentication</span>: <span class="string"><span class="content">true</span></span>
+    <span class="key">subjectBuilder</span>: <span class="string"><span class="content">&lt;class name&gt;</span></span>
+    <span class="key">subjectBuilderConfig</span>: <span class="string"><span class="content">&lt;object providing configuration for the subject builder&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>enabledMechanisms</code> restricts the filter to the given SASL mechanism(s). Refer to SASL mechanism by its name given in the <a href="#supported-mechanisms-auth-sasl-inspection">supported mechanisms</a> table. If omitted, the SASL mechanisms <code>SCRAM-SHA-256</code>, <code>SCRAM-SHA-512</code> and <code>OAUTHBEARER</code> will be enabled by default.</p>
+       </li>
+       <li>
+        <p>if <code>requireAuthentication</code> is true, a successful authentication is required before the filter forwards any requests other than those strictly required to perform SASL authentication. If false then the filter will forward all requests regardless of whether SASL authentication has been attempted or was successful. Defaults to false.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilder</code> is the name of a plugin class implementing <code>io.kroxylicious.proxy.authentication.SaslSubjectBuilderService</code>. If omitted, a default subject builder creates a principal with name matching the SASL authorized ID.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilderConfig</code> provides subject builder configuration.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-authentication-sasl-termination-auth-sasl-termination">10. Configuring SASL Termination</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>To enable SASL Termination, configure a <code>SaslTermination</code> filter in the proxy’s filter chain. This filter handles the SASL authentication exchange at the proxy without forwarding it to the broker. The proxy validates the client’s credentials directly and constructs an authenticated subject on success.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+      <li>
+       <p>For the <code>OAUTHBEARER</code> mechanism, a reachable JWKS endpoint that publishes the public keys used to verify JWT signatures.</p>
+      </li>
+      <li>
+       <p>For the <code>SCRAM-SHA-256</code> or <code>SCRAM-SHA-512</code> mechanism, a credential store containing the SCRAM credentials for your users. The built-in <code>ScramCredentialFileService</code> uses a proxy SCRAM credential file populated using the SCRAM credential tool.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure a <code>SaslTermination</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-auth-sasl-termination">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-auth-sasl-termination">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-auth-sasl-termination">10.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here is a complete example of a <code>filterDefinitions</code> entry configured for SASL Termination with both <code>OAUTHBEARER</code> and <code>SCRAM-SHA-256</code> mechanisms:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-sasl-termination-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">SaslTermination</span></span>
+    <span class="key">config</span>:
+      <span class="key">mechanisms</span>:
+        - <span class="string"><span class="content">mechanism: OAUTHBEARER</span></span>
+          <span class="key">jwksEndpointUrl</span>: <span class="string"><span class="content">https://idp.example.com/.well-known/jwks.json</span></span>
+          <span class="key">expectedAudience</span>: <span class="string"><span class="content">kafka</span></span>
+          <span class="key">expectedIssuer</span>: <span class="string"><span class="content">https://idp.example.com</span></span>
+        - <span class="string"><span class="content">mechanism: SCRAM-SHA-256</span></span>
+          <span class="key">credentialStore</span>: <span class="string"><span class="content">ScramCredentialFileService</span></span>
+          <span class="key">credentialStoreConfig</span>:
+            <span class="key">file</span>: <span class="string"><span class="content">/etc/kroxylicious/scram-credentials.p12</span></span>
+            <span class="key">filePassword</span>:
+              <span class="key">passwordFile</span>: <span class="string"><span class="content">/etc/kroxylicious/file-password.txt</span></span>
+      <span class="key">maxTimeBeforeReauth</span>: <span class="string"><span class="content">1h</span></span>
+      <span class="key">fixedAuthDelay</span>: <span class="string"><span class="content">200ms</span></span>
+      <span class="key">subjectBuilder</span>: <span class="string"><span class="content">&lt;class name&gt;</span></span>
+      <span class="key">subjectBuilderConfig</span>: <span class="string"><span class="content">&lt;object providing configuration for the subject builder&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>mechanisms</code> (required) configures the enabled SASL mechanisms that the filter supports. Each entry specifies a <code>mechanism</code> name and mechanism-specific configuration. <code>OAUTHBEARER</code>, <code>SCRAM-SHA-256</code>, and <code>SCRAM-SHA-512</code> are supported.</p>
+       </li>
+       <li>
+        <p><code>maxTimeBeforeReauth</code> specifies the maximum session lifetime before the client must reauthenticate (<a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate">KIP-368</a>). The effective session expiry is the earlier of this value and the token’s own expiry. If omitted, session expiry is governed solely by the token’s expiry claim.</p>
+       </li>
+       <li>
+        <p><code>fixedAuthDelay</code> specifies the fixed delay applied to each authentication round to mitigate timing side-channel attacks. Defaults to 200 milliseconds if omitted. Set to <code>0s</code> to disable.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilder</code> is the name of a plugin class implementing <code>io.kroxylicious.proxy.authentication.SaslSubjectBuilderService</code>. If omitted, a default subject builder creates a principal with name matching the SASL authorization ID.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilderConfig</code> provides subject builder configuration.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="sect3">
+      <h4 id="oauthbearer_mechanism_configuration">10.1.1. OAUTHBEARER mechanism configuration</h4>
+      <div class="paragraph">
+       <p>The <code>OAUTHBEARER</code> mechanism validates JWT bearer tokens against a JWKS endpoint.</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>jwksEndpointUrl</code> (required) specifies the OAuth/OIDC provider endpoint from which the JSON Web Key Set (JWKS) is retrieved.</p>
+        </li>
+        <li>
+         <p><code>expectedAudience</code> (required) specifies the expected audience claim value used to verify the JWT. Use a comma-separated list for multiple valid audiences.</p>
+        </li>
+        <li>
+         <p><code>expectedIssuer</code> (required) specifies the expected issuer claim value used to verify the JWT.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The following properties are optional:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>scopeClaimName</code> specifies an alternative claim name for the scope in the JWT payload.</p>
+        </li>
+        <li>
+         <p><code>subClaimName</code> specifies an alternative claim name for the subject in the JWT payload.</p>
+        </li>
+        <li>
+         <p><code>jwksEndpointRefresh</code> specifies the interval between refreshes of the JWKS cache used to verify JWT signatures.</p>
+        </li>
+        <li>
+         <p><code>jwksEndpointRetryBackoff</code> specifies the initial delay between attempts to retrieve the JWKS from the external authentication provider.</p>
+        </li>
+        <li>
+         <p><code>jwksEndpointRetryBackoffMax</code> specifies the maximum delay between JWKS retrieval attempts.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="scram_sha_256_and_scram_sha_512_mechanism_configuration">10.1.2. SCRAM-SHA-256 and SCRAM-SHA-512 mechanism configuration</h4>
+      <div class="paragraph">
+       <p>The <code>SCRAM-SHA-256</code> and <code>SCRAM-SHA-512</code> mechanisms validate client credentials against a pluggable credential store.</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>credentialStore</code> (required) specifies the name of a plugin implementing <code>ScramCredentialStoreService</code>. The built-in credential file store is named <code>ScramCredentialFileService</code>.</p>
+        </li>
+        <li>
+         <p><code>credentialStoreConfig</code> (required) provides configuration for the credential store plugin. The structure depends on the credential store implementation.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="sect4">
+       <h5 id="credential_file_store_configuration">Credential file store configuration</h5>
+       <div class="paragraph">
+        <p>The <code>ScramCredentialFileService</code> credential store loads SCRAM credentials from a proxy SCRAM credential file. Use the SCRAM credential tool to create and populate this file. See <a href="#proc-managing-scram-credentials-auth-sasl-termination">Managing SCRAM credentials</a> for instructions.</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>file</code> (required) specifies the path to the proxy SCRAM credential file.</p>
+         </li>
+         <li>
+          <p><code>filePassword</code> (required) specifies the password used to access the SCRAM credential file, using a <code>PasswordProvider</code>:</p>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p><code>passwordFile</code> specifies the path to a file containing the password. This is the recommended approach for production deployments.</p>
+            </li>
+            <li>
+             <p><code>password</code> specifies the password inline. This is not recommended for production use.</p>
+            </li>
+           </ul>
+          </div>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>For more information about configuring proxy, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a>.</p>
+       </div>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-auth-sasl-termination">10.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here is a complete example of a <code>KafkaProtocolFilter</code> resource configured for SASL Termination with both <code>OAUTHBEARER</code> and <code>SCRAM-SHA-256</code> mechanisms:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-sasl-termination-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">SaslTermination</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">mechanisms</span>:
+      - <span class="string"><span class="content">mechanism: OAUTHBEARER</span></span>
+        <span class="key">jwksEndpointUrl</span>: <span class="string"><span class="content">https://idp.example.com/.well-known/jwks.json</span></span>
+        <span class="key">expectedAudience</span>: <span class="string"><span class="content">kafka</span></span>
+        <span class="key">expectedIssuer</span>: <span class="string"><span class="content">https://idp.example.com</span></span>
+      - <span class="string"><span class="content">mechanism: SCRAM-SHA-256</span></span>
+        <span class="key">credentialStore</span>: <span class="string"><span class="content">ScramCredentialFileService</span></span>
+        <span class="key">credentialStoreConfig</span>:
+          <span class="key">file</span>: <span class="string"><span class="content">${secret:scram-credentials:credentials.p12}</span></span>
+          <span class="key">filePassword</span>:
+            <span class="key">passwordFile</span>: <span class="string"><span class="content">${secret:scram-credentials:file-password}</span></span>
+    <span class="key">maxTimeBeforeReauth</span>: <span class="string"><span class="content">1h</span></span>
+    <span class="key">fixedAuthDelay</span>: <span class="string"><span class="content">200ms</span></span>
+    <span class="key">subjectBuilder</span>: <span class="string"><span class="content">&lt;class name&gt;</span></span>
+    <span class="key">subjectBuilderConfig</span>: <span class="string"><span class="content">&lt;object providing configuration for the subject builder&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>mechanisms</code> (required) configures the enabled SASL mechanisms that the filter supports. Each entry specifies a <code>mechanism</code> name and mechanism-specific configuration. <code>OAUTHBEARER</code>, <code>SCRAM-SHA-256</code>, and <code>SCRAM-SHA-512</code> are supported.</p>
+       </li>
+       <li>
+        <p><code>maxTimeBeforeReauth</code> specifies the maximum session lifetime before the client must reauthenticate (<a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate">KIP-368</a>). The effective session expiry is the earlier of this value and the token’s own expiry. If omitted, session expiry is governed solely by the token’s expiry claim.</p>
+       </li>
+       <li>
+        <p><code>fixedAuthDelay</code> specifies the fixed delay applied to each authentication round to mitigate timing side-channel attacks. Defaults to 200 milliseconds if omitted. Set to <code>0s</code> to disable.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilder</code> is the name of a plugin class implementing <code>io.kroxylicious.proxy.authentication.SaslSubjectBuilderService</code>. If omitted, a default subject builder creates a principal with name matching the SASL authorization ID.</p>
+       </li>
+       <li>
+        <p><code>subjectBuilderConfig</code> provides subject builder configuration.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>For <code>OAUTHBEARER</code> mechanism configuration, see the bare-metal configuration example for a full description of the mechanism-specific fields (<code>jwksEndpointUrl</code>, <code>expectedAudience</code>, <code>expectedIssuer</code>, and others).</p>
+     </div>
+     <div class="paragraph">
+      <p>For <code>SCRAM-SHA-256</code> and <code>SCRAM-SHA-512</code> mechanism configuration, see the bare-metal configuration example for a full description of the mechanism-specific fields (<code>credentialStore</code>, <code>credentialStoreConfig</code>). The <code>${secret:scram-credentials:credentials.p12}</code> and <code>${secret:scram-credentials:file-password}</code> syntax references entries from the Kubernetes Secret named <code>scram-credentials</code>. The operator automatically mounts the referenced Secret entries as files in the proxy container and replaces the interpolation expressions with the corresponding file paths.</p>
+     </div>
+     <div class="paragraph">
+      <p>For more information about configuration on Kubernetes, see the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="proc-managing-scram-credentials-auth-sasl-termination">10.3. Managing SCRAM credentials</h3>
+     <div class="paragraph _abstract">
+      <p>Use the SCRAM credential tool to create and manage a proxy SCRAM credential file for SCRAM-SHA-256 and SCRAM-SHA-512 authentication. The tool ships in the Kroxylicious distribution at <code>bin/scram-credential-tool.sh</code>.</p>
+     </div>
+     <div class="paragraph">
+      <p>The proxy SCRAM credential file stores SCRAM derived keys, not plaintext passwords. By default, the tool prompts you for a password and requires you to confirm it when you set a new password. For more information about the proxy SCRAM credential file format and security properties, see <a href="#con-scram-security-auth-sasl-termination">SCRAM security considerations</a></p>
+     </div>
+     <div class="ulist">
+      <div class="title">Prerequisites</div>
+      <ul>
+       <li>
+        <p>A Kroxylicious distribution installed on the system where you run the tool.</p>
+       </li>
+       <li>
+        <p>Java 21 or later.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="olist arabic">
+      <div class="title">Procedure</div>
+      <ol class="arabic">
+       <li>
+        <p>Generate a strong file password and save it to a file:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">openssl rand -base64 32 &gt; /etc/kroxylicious/file-password.txt</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>You use this password when prompted by the credential tool commands below.</p>
+        </div>
+       </li>
+       <li>
+        <p>Create a new proxy SCRAM credential file:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">bin/scram-credential-tool.sh create \
+  -f /etc/kroxylicious/scram-credentials.p12</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>The tool prompts for a file password. Enter the password generated in step 1.</p>
+        </div>
+        <div class="paragraph">
+         <p>On POSIX filesystems, the tool automatically restricts file permissions to owner-only access. If you create the file on a non-POSIX filesystem (such as Windows) and later transfer it to a POSIX system, restrict permissions manually:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">chmod 600 /etc/kroxylicious/scram-credentials.p12</code></pre>
+         </div>
+        </div>
+       </li>
+       <li>
+        <p>Add a user with SCRAM-SHA-256 credentials:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">bin/scram-credential-tool.sh add-user \
+  -f /etc/kroxylicious/scram-credentials.p12 \
+  -u alice \
+  -m SCRAM-SHA-256 \
+  -i 10000</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>The tool prompts for the file password and the user’s password. Passwords must be at least 12 characters long. There is no restriction on which characters may be used, but sticking to ASCII alphabetic characters, digits, and punctuation is advised.</p>
+        </div>
+        <div class="paragraph">
+         <p><code>-m</code> selects the SCRAM mechanism. Valid values are <code>SCRAM-SHA-256</code> (default) and <code>SCRAM-SHA-512</code>.</p>
+        </div>
+        <div class="paragraph">
+         <p><code>-i</code> sets the PBKDF2 iteration count (default 10000, minimum 4096). Higher values increase the cost of brute-force attacks against the credential store but also increase the CPU cost of each authentication.</p>
+        </div>
+       </li>
+       <li>
+        <p>List users in the credential file:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">bin/scram-credential-tool.sh list-users \
+  -f /etc/kroxylicious/scram-credentials.p12</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>The output shows each user’s name, mechanism, and iteration count.</p>
+        </div>
+       </li>
+       <li>
+        <p>Update a user’s password:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">bin/scram-credential-tool.sh update-password \
+  -f /etc/kroxylicious/scram-credentials.p12 \
+  -u alice</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>The tool prompts for the file password and the new user password. The <code>-m</code> and <code>-i</code> options are also available if you need to change the mechanism or iteration count.</p>
+        </div>
+       </li>
+       <li>
+        <p>Remove a user:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">bin/scram-credential-tool.sh remove-user \
+  -f /etc/kroxylicious/scram-credentials.p12 \
+  -u alice</code></pre>
+         </div>
+        </div>
+       </li>
+      </ol>
+     </div>
+     <div class="sect3">
+      <h4 id="non_interactive_password_options">10.3.1. Non-interactive password options</h4>
+      <div class="paragraph">
+       <p>By default, the tool prompts for passwords interactively. For automation scenarios, the <code>--unlock-insecure-options</code> flag enables the <code>-p</code> (file password) and <code>-w</code> (user password) command-line options.</p>
+      </div>
+      <div class="admonitionblock warning">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+          <td class="content">Command-line passwords are visible in process listings, shell history, and system logs. Prefer interactive prompts or other secret management approaches for production use.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="using_the_credential_file_on_kubernetes">10.3.2. Using the credential file on Kubernetes</h4>
+      <div class="paragraph">
+       <p>To use the proxy SCRAM credential file in a Kubernetes deployment:</p>
+      </div>
+      <div class="olist arabic">
+       <ol class="arabic">
+        <li>
+         <p>Create a Kubernetes Secret containing both the credential file and the file password:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">kubectl create secret generic scram-credentials \
+  --from-file=credentials.p12=/etc/kroxylicious/scram-credentials.p12 \
+  --from-file=file-password=/etc/kroxylicious/file-password.txt</code></pre>
+          </div>
+         </div>
+         <div class="paragraph">
+          <p>The key names (<code>credentials.p12</code> and <code>file-password</code>) must match the keys used in the <code>${secret:…​}</code> interpolation expressions in the <code>KafkaProtocolFilter</code> resource.</p>
+         </div>
+        </li>
+        <li>
+         <p>Reference the secret in the <code>KafkaProtocolFilter</code> resource using the <code>${secret:…​}</code> interpolation syntax. The operator automatically mounts the referenced Secret entries as files in the proxy container. For example, see <a href="#con-example-kafkaprotocolfilter-resource-auth-sasl-termination">Example <code>KafkaProtocolFilter</code> resource</a></p>
+        </li>
+       </ol>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-scram-security-auth-sasl-termination">10.4. SCRAM security considerations</h3>
+     <div class="paragraph _abstract">
+      <p>This section describes the security measures that the <code>SaslTermination</code> filter applies when handling SCRAM-SHA-256 and SCRAM-SHA-512 authentication.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="credential_storage">10.4.1. Credential storage</h4>
+      <div class="paragraph">
+       <p>The SCRAM credential tool creates a <em>proxy SCRAM credential file</em> — a PKCS#12 file with an internal format specific to Kroxylicious. Always use the SCRAM credential tool to create and modify this file; other tools such as the JDK <code>keytool</code> are not compatible with the internal format.</p>
+      </div>
+      <div class="paragraph">
+       <p>The proxy SCRAM credential file does not contain plaintext passwords. When a user is added, the password is processed through PBKDF2 key derivation to produce two derived keys: <code>StoredKey</code> and <code>ServerKey</code>. Only these derived keys and the associated salt and iteration count are stored.</p>
+      </div>
+      <div class="paragraph">
+       <p>The PBKDF2 iteration count controls the computational cost of deriving keys from a password. Higher values increase resistance to brute-force attacks against the credential file, but also increase the CPU cost of each authentication. The default is 10000, and the minimum is 4096.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="username_enumeration_protection">10.4.2. Username enumeration protection</h4>
+      <div class="paragraph">
+       <p>The filter protects against username enumeration attacks by generating synthetic SCRAM challenges for unknown usernames. These <em>phantom challenges</em> are constructed so that an attacker cannot distinguish between a response for a valid user and a response for a non-existent user.</p>
+      </div>
+      <div class="paragraph">
+       <p>To maintain this protection, the <code>phantomIterations</code> configuration property should match the iteration count used when creating real credentials. The iteration count is sent as a plaintext field in the SCRAM server challenge message, so if phantom challenges use a different iteration count than real credentials, an attacker can simply compare the values across attempts to distinguish real usernames from non-existent ones.</p>
+      </div>
+      <div class="paragraph">
+       <p>All proxy instances must use the same proxy SCRAM credential file, because it contains a secret key used to derive phantom salts. If different instances used different files, phantom challenges for the same username would produce different salts across instances, which could reveal which challenges are phantom.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="timing_side_channel_mitigation">10.4.3. Timing side-channel mitigation</h4>
+      <div class="paragraph">
+       <p>The <code>fixedAuthDelay</code> property (configured at the <code>SaslTermination</code> filter level, not per mechanism) applies a fixed delay to each authentication round. This ensures that authentication responses take a consistent amount of time regardless of whether the user exists, the password is correct, or any other condition. The default delay is 200 milliseconds.</p>
+      </div>
+      <div class="paragraph">
+       <p>If connection latency is a higher priority than timing attack mitigation, the delay can be set to <code>0s</code> to disable it entirely. The value can also be tuned to a lower delay, but if it is configured low enough that authentication processing frequently exceeds the fixed delay, the timing attack mitigation is lost. The <code>kroxylicious_filter_sasl_termination_auth_duration_seconds</code> metric records the real authentication latency exclusive of the fixed delay, and the filter logs a warning when authentication processing exceeds it. Use these to inform any tuning. For details, see the Authentication metrics and Authentication logging sections of this guide.</p>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-authentication-oauthbearer-auth-oauthbearer">11. Configuring OAuthBearer Validation</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>To enable OAuthBearer Validation, configure an <code>OauthBearerValidation</code> filter in the proxy’s filter chain. This filter validates JWT bearer tokens received from clients before forwarding the SASL exchange to the broker. If the token is invalid, the proxy short-circuits the exchange and returns an error to the client.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+      <li>
+       <p>The Kafka cluster’s listener must be configured with the <code>OAUTHBEARER</code> SASL mechanism.</p>
+      </li>
+      <li>
+       <p>A reachable JWKS endpoint that publishes the public keys used to verify JWT signatures.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure an <code>OauthBearerValidation</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-auth-oauthbearer">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-auth-oauthbearer">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">OauthBearer configuration follows <a href="https://kafka.apache.org/42/security/encryption-and-authentication-using-ssl">Kafka’s SSL properties</a>.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-auth-oauthbearer">11.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>filterDefinitions</code> entry configured for Oauth Bearer validation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>filterDefinitions</code> configuration
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-oauth-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">OauthBearerValidation</span></span>
+    <span class="key">config</span>:
+      <span class="key">jwksEndpointUrl</span>: <span class="string"><span class="content">https://oauth/JWKS</span></span>
+      <span class="key">jwksEndpointRefreshMs</span>: <span class="string"><span class="content">3600000</span></span>
+      <span class="key">jwksEndpointRetryBackoffMs</span>: <span class="string"><span class="content">100</span></span>
+      <span class="key">jwksEndpointRetryBackoffMaxMs</span>: <span class="string"><span class="content">10000</span></span>
+      <span class="key">scopeClaimName</span>: <span class="string"><span class="content">scope</span></span>
+      <span class="key">subClaimName</span>: <span class="string"><span class="content">sub</span></span>
+      <span class="key">authenticateBackOffMaxMs</span>: <span class="string"><span class="content">60000</span></span>
+      <span class="key">authenticateCacheMaxSize</span>: <span class="string"><span class="content">1000</span></span>
+      <span class="key">expectedAudience</span>: <span class="string"><span class="content">https://first.audience, https//second.audience</span></span>
+      <span class="key">expectedIssuer</span>: <span class="string"><span class="content">https://your-domain.auth/</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>jwksEndpointUrl</code> (Required) specifies the OAuth/OIDC provider endpoint from which the JSON Web Key Set (JWKS) is retrieved. The following properties are optional:</p>
+       </li>
+       <li>
+        <p><code>jwksEndpointRefreshMs</code> specifies the interval, in milliseconds, between refreshes of the JWKS cache used to verify JWT signatures.</p>
+       </li>
+       <li>
+        <p><code>jwksEndpointRetryBackoffMs</code> specifies the initial delay, in milliseconds, between attempts to retrieve the JWKS from the external authentication provider.</p>
+       </li>
+       <li>
+        <p><code>jwksEndpointRetryBackoffMaxMs</code> specifies the maximum delay, in milliseconds, between JWKS retrieval attempts.</p>
+       </li>
+       <li>
+        <p><code>scopeClaimName</code> specifies an alternative claim name for the scope in the JWT payload.</p>
+       </li>
+       <li>
+        <p><code>subClaimName</code> specifies an alternative claim name for the subject in the JWT payload.</p>
+       </li>
+       <li>
+        <p><code>authenticateBackOffMaxMs</code> specifies the maximum backoff time, in milliseconds, applied to repeated authentication attempts. A value of 0 disables backoff. Otherwise, an exponential delay is added to each authenticate request until the <code>authenticateBackOffMaxMs</code> has been reached.</p>
+       </li>
+       <li>
+        <p><code>authenticateCacheMaxSize</code> specifies the maximum number of failed tokens retained in the cache.</p>
+       </li>
+       <li>
+        <p><code>expectedAudience</code> specifies a comma-delimited list of valid audiences used to verify the JWT.</p>
+       </li>
+       <li>
+        <p><code>expectedIssuer</code> specifies the expected issuer used to verify the JWT.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-auth-oauthbearer">11.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for Oauth Bearer validation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProtocolFilter</code> resource for record validation
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-oauth-bearer-validation-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">OauthBearerValidation</span></span>
+  <span class="key">configTemplate</span>:
+      <span class="key">jwksEndpointUrl</span>: <span class="string"><span class="content">https://oauth/JWKS</span></span>
+      <span class="key">jwksEndpointRefreshMs</span>: <span class="string"><span class="content">3600000</span></span>
+      <span class="key">jwksEndpointRetryBackoffMs</span>: <span class="string"><span class="content">100</span></span>
+      <span class="key">jwksEndpointRetryBackoffMaxMs</span>: <span class="string"><span class="content">10000</span></span>
+      <span class="key">scopeClaimName</span>: <span class="string"><span class="content">scope</span></span>
+      <span class="key">subClaimName</span>: <span class="string"><span class="content">sub</span></span>
+      <span class="key">authenticateBackOffMaxMs</span>: <span class="string"><span class="content">60000</span></span>
+      <span class="key">authenticateCacheMaxSize</span>: <span class="string"><span class="content">1000</span></span>
+      <span class="key">expectedAudience</span>: <span class="string"><span class="content">https://first.audience, https//second.audience</span></span>
+      <span class="key">expectedIssuer</span>: <span class="string"><span class="content">https://your-domain.auth/</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>jwksEndpointUrl</code> (Required) specifies the OAuth/OIDC provider URL from which the provider’s JSON Web Key Set (JWKS) is retrieved. The following properties are optional:</p>
+       </li>
+       <li>
+        <p><code>jwksEndpointRefreshMs</code> specifies the interval, in milliseconds, between refreshes of the JWKS cache used to verify JWT signatures.</p>
+       </li>
+       <li>
+        <p><code>jwksEndpointRetryBackoffMs</code> specifies the initial delay, in milliseconds, between attempts to retrieve the JWKS from the external authentication provider.</p>
+       </li>
+       <li>
+        <p><code>jwksEndpointRetryBackoffMaxMs</code> specifies the maximum delay, in milliseconds, between JWKS retrieval attempts.</p>
+       </li>
+       <li>
+        <p><code>scopeClaimName</code> specifies an alternative claim name for the scope in the JWT payload.</p>
+       </li>
+       <li>
+        <p><code>subClaimName</code> specifies an alternative claim name for the subject in the JWT payload.</p>
+       </li>
+       <li>
+        <p><code>authenticateBackOffMaxMs</code> specifies the maximum backoff time, in milliseconds, applied to repeated authentication attempts. A value of 0 disables backoff. Otherwise, an exponential delay is added to each authenticate request until the <code>authenticateBackOffMaxMs</code> has been reached.</p>
+       </li>
+       <li>
+        <p><code>authenticateCacheMaxSize</code> specifies the maximum number of failed tokens retained in the cache.</p>
+       </li>
+       <li>
+        <p><code>expectedAudience</code> specifies a comma-delimited list of valid audiences used to verify the JWT.</p>
+       </li>
+       <li>
+        <p><code>expectedIssuer</code> specifies the expected issuer used to verify the JWT.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-configuring-sasl-subject-builder-authentication">12. Configuring SASL subject builder</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>By default, the SASL Inspection filter creates an authenticated subject with a principal that contains the SASL authorized ID. You can change this behavior by providing an alternative subject builder configuration.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="configuration_2">12.1. Configuration</h3>
+     <div class="paragraph">
+      <p>The following example shows configuration for the SASL subject builder:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="comment"># ...</span>
+<span class="key">subjectBuilder</span>: <span class="string"><span class="content">DefaultSaslSubjectBuilderService</span></span>
+<span class="key">subjectBuilderConfig</span>:
+    <span class="key">addPrincipals</span>:
+      - <span class="string"><span class="content">from: &lt;field name&gt;</span></span>
+        <span class="key">map</span>:
+          - <span class="string"><span class="content">replaceMatch: &lt;match replace flags 1&gt;</span></span>
+          - <span class="comment"># ...</span>
+          - <span class="string"><span class="content">replaceMatch: &lt;match replace flags n&gt;</span></span>
+          - <span class="string"><span class="content">else: identity|anonymous</span></span>
+        <span class="key">principalFactory</span>: <span class="string"><span class="content">&lt;principal factory&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>&lt;field name&gt;</code> identifies the field to extract. Valid field names are listed in the <strong>Supported fields</strong> table.</p>
+       </li>
+       <li>
+        <p><code>&lt;match replace flags 1&gt;</code>…​<code>&lt;match replace flags n&gt;</code> define a set of replacement matchers used to match and transform the field value.</p>
+       </li>
+       <li>
+        <p><code>else</code> defines the behavior when none of the replacement matchers match the field value. <code>identity</code> generates a principal based on the original (unmapped) field value. <code>anonymous</code> generates an anonymous principal.</p>
+       </li>
+       <li>
+        <p><code>&lt;principal factory&gt;</code> the name of a <code>PrincipalFactory</code> implementation. Currently, only <code>UserFactory</code> is supported.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Field values are tested against the replacement matchers in the order they are configured. The first matcher that matches the field value generates the principal. After a successful match, remaining matchers for that field are ignored.</p>
+     </div>
+     <div class="paragraph">
+      <p>If no matcher matches, the outcome is defined by the <code>else</code> clause. If there is no match and no <code>else</code> cause is provided, no principal is generated for this field.</p>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">Currently, the subject builder is restricted to producing a subject containing at most one user principal.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="supported_fields_2">12.2. Supported fields</h3>
+     <table class="tableblock frame-all grid-all stretch">
+      <colgroup>
+       <col style="width: 50%;">
+       <col style="width: 50%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Field name</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">saslAuthorizedId</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The SASL authorized ID returned by the SASL authentication exchange.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="replacement_matchers_2">12.3. Replacement matchers</h3>
+     <div class="paragraph">
+      <p>Replacement matchers control how field values are matched and transformed. A replacement matcher is defined using this format:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>/&lt;matching regular expression&gt;/&lt;replacement&gt;/&lt;flags&gt;</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>&lt;matching regular expression&gt;</code> is the regular expression used to test the field value.</p>
+       </li>
+       <li>
+        <p><code>&lt;replacement&gt;</code> defines the replacement value to use when the regular expression is matched. The replacement can use back references (<code>$1</code> etc) to refer to capturing groups defined within the regular expression.</p>
+       </li>
+       <li>
+        <p><code>&lt;flags&gt;</code> (optional) can be either <code>L</code> or <code>U</code> for lower or upper-casing respectively. The case transformation is applied to the replacement value after any back reference resolution.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-authentication-metrics-authentication">13. Authentication metrics</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>When a filter announces a client authentication outcome, the proxy records it as a metric. This allows operators to monitor authentication activity across all virtual clusters and SASL mechanisms.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="available_metrics">13.1. Available metrics</h3>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 5. Authentication metrics</caption>
+      <colgroup>
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Metric name</th>
+        <th class="tableblock halign-left valign-top">Type</th>
+        <th class="tableblock halign-left valign-top">Labels</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>kroxylicious_client_auth_total</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Counter</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>virtual_cluster</code>, <code>mechanism</code>, <code>outcome</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Incremented by one every time a filter announces a client authentication outcome. The <code>mechanism</code> label identifies the SASL mechanism used (for example, <code>SCRAM-SHA-256</code>, <code>OAUTHBEARER</code>), or <code>unknown</code> if the mechanism could not be determined. The <code>outcome</code> label is <code>success</code> or <code>failure</code>.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">This metric is emitted by the proxy runtime, not by individual filters. It is incremented whenever a filter calls <code>clientSaslAuthenticationSuccess</code> or <code>clientSaslAuthenticationFailure</code> on the filter context. Both the <code>SaslInspection</code> and <code>SaslTermination</code> filters trigger this metric. In SASL Passthrough mode (the default, with no SASL filter configured), no filter announces authentication outcomes, so this metric is not incremented.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_termination_metrics">13.2. SASL Termination metrics</h3>
+     <div class="paragraph">
+      <p>The <code>SaslTermination</code> filter emits additional metrics specific to the termination process.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 6. SASL Termination metrics</caption>
+      <colgroup>
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Metric name</th>
+        <th class="tableblock halign-left valign-top">Type</th>
+        <th class="tableblock halign-left valign-top">Labels</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>kroxylicious_filter_sasl_termination_auth_duration_seconds</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Timer</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>mechanism</code>, <code>virtual_cluster</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Records the authentication latency, exclusive of the configured fixed timing delay. This measures the real work performed during authentication: credential store lookup, token validation, and signature verification. Recorded on both successful and failed authentication attempts.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>kroxylicious_filter_sasl_termination_session_expired_total</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Counter</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>mechanism</code>, <code>virtual_cluster</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Incremented by one every time a client’s session expires without the client reauthenticating in time. When this counter increments, the client’s next request is rejected and the connection is closed.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="operational_use">13.3. Operational use</h3>
+     <div class="paragraph">
+      <p>Use <code>kroxylicious_client_auth_total</code> to:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Monitor authentication failure rates</dt>
+       <dd>
+        <p>A sudden increase in <code>kroxylicious_client_auth_total{outcome="failure"}</code> may indicate misconfigured clients, expired credentials, or a brute-force attempt.</p>
+        <div class="paragraph">
+         <p>Example Prometheus alert:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="promql">rate(kroxylicious_client_auth_total{outcome="failure"}[5m]) &gt; 10</code></pre>
+         </div>
+        </div>
+       </dd>
+       <dt class="hdlist1">Compare authentication activity across mechanisms</dt>
+       <dd>
+        <p>Break down authentication events by the <code>mechanism</code> label to understand which SASL mechanisms are in use across your deployment.</p>
+       </dd>
+       <dt class="hdlist1">Detect unexpected mechanisms</dt>
+       <dd>
+        <p>Alert if clients authenticate using a mechanism you do not expect, which may indicate a misconfigured client or an attempt to use a weaker mechanism.</p>
+       </dd>
+       <dt class="hdlist1">Correlate with connection metrics</dt>
+       <dd>
+        <p>Compare <code>kroxylicious_client_auth_total{outcome="success"}</code> with <code>kroxylicious_client_to_proxy_connections_total</code> to understand what proportion of connections successfully authenticate.</p>
+       </dd>
+       <dt class="hdlist1">Tune the fixed authentication delay</dt>
+       <dd>
+        <p>Use <code>kroxylicious_filter_sasl_termination_auth_duration_seconds</code> to understand how long authentication actually takes. If the p99 latency approaches or exceeds the configured <code>fixedAuthDelay</code>, the filter logs a warning and the timing side-channel mitigation is less effective. Consider increasing <code>fixedAuthDelay</code> to maintain a margin above the observed authentication latency.</p>
+       </dd>
+       <dt class="hdlist1">Alert on session expiry</dt>
+       <dd>
+        <p>A rising <code>kroxylicious_filter_sasl_termination_session_expired_total</code> indicates that clients are not reauthenticating before their sessions expire. This may indicate misconfigured clients, network issues preventing reauthentication, or a <code>maxTimeBeforeReauth</code> value that is too short for the workload.</p>
+       </dd>
+      </dl>
+     </div>
+     <div class="paragraph">
+      <p>For the full list of proxy metrics, see the monitoring section of the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a>.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-authentication-logging-authentication">14. Authentication logging</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The proxy emits structured log messages for authentication events. These log messages provide visibility into authentication activity and can serve as a basic form of audit trail until a dedicated audit log is available.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="runtime_authentication_logs">14.1. Runtime authentication logs</h3>
+     <div class="paragraph">
+      <p>The proxy runtime logs authentication outcomes announced by filters at <code>INFO</code> level. These messages are emitted by the <code>FilterHandler</code> class regardless of which filter triggers the authentication event.</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Authentication success</dt>
+       <dd>
+        <p>Logged at <code>INFO</code> level with the following structured fields:</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>mechanism</code> — the SASL mechanism used (for example, <code>SCRAM-SHA-256</code>)</p>
+          </li>
+          <li>
+           <p><code>subject</code> — the authenticated subject constructed by the subject builder</p>
+           <div class="paragraph">
+            <p>Message: <code>Filter announces client has passed SASL authentication</code></p>
+           </div>
+          </li>
+         </ul>
+        </div>
+       </dd>
+       <dt class="hdlist1">Authentication failure</dt>
+       <dd>
+        <p>Logged at <code>INFO</code> level with the following structured fields:</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>mechanism</code> — the SASL mechanism used, or <code>null</code> if not yet determined</p>
+          </li>
+          <li>
+           <p><code>authorizedId</code> — the authorization ID of the client, or <code>null</code> if not available</p>
+          </li>
+          <li>
+           <p><code>error</code> — the error message from the authentication failure</p>
+           <div class="paragraph">
+            <p>Message: <code>Filter announces client has failed SASL authentication</code></p>
+           </div>
+           <div class="paragraph">
+            <p>The full stack trace is included only when the log level is set to <code>DEBUG</code>. At <code>INFO</code> level, the log message includes a hint to increase the log level for the stack trace.</p>
+           </div>
+          </li>
+         </ul>
+        </div>
+       </dd>
+      </dl>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_inspection_filter_logs">14.2. SASL Inspection filter logs</h3>
+     <div class="paragraph">
+      <p>The <code>SaslInspection</code> filter emits additional log messages specific to the SASL inspection process.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 7. SASL Inspection filter log messages</caption>
+      <colgroup>
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Level</th>
+        <th class="tableblock halign-left valign-top">Message</th>
+        <th class="tableblock halign-left valign-top">Structured fields</th>
+        <th class="tableblock halign-left valign-top">When emitted</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">INFO</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Client attempted request without having SASL authentication</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>apiKey</code>, <code>authenticationDisposition</code>, <code>outcome</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">A client sends a Kafka request without having completed SASL authentication, and <code>requireAuthentication</code> is enabled.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">INFO</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Client sent authorization request containing a SASL response that could not be interpreted</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>clientId</code>, <code>sessionId</code>, <code>error</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The proxy could not parse the SASL response from the client. The full stack trace is included only at <code>DEBUG</code> level.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">INFO</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Authentication failed</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The broker rejected the client’s SASL credentials.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">INFO</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Server rejects SASL credentials</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>errorCode</code>, <code>sessionId</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The broker returned an error code in response to the SASL authentication attempt.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">INFO</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Server has accepted an expired SASL credentials. Client must re-authenticate</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The broker accepted credentials that are nearing expiry, and the client will need to re-authenticate.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Exception caught while trying to build subject</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>error</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The subject builder threw an exception while constructing the authenticated subject. The full stack trace is included only at <code>DEBUG</code> level.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="sasl_termination_filter_logs">14.3. SASL Termination filter logs</h3>
+     <div class="paragraph">
+      <p>The <code>SaslTermination</code> filter emits log messages for authentication events and security-relevant conditions.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 8. SASL Termination filter log messages</caption>
+      <colgroup>
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Level</th>
+        <th class="tableblock halign-left valign-top">Message</th>
+        <th class="tableblock halign-left valign-top">Structured fields</th>
+        <th class="tableblock halign-left valign-top">When emitted</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Reauthentication rejected: mechanism change not permitted</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>mechanism</code>, <code>previousMechanism</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">A client attempts to reauthenticate using a different SASL mechanism than the one used for the original authentication. The connection is closed.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Reauthentication rejected: authorization ID changed</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>reauthentication</code>, <code>previousAuthorizationId</code>, <code>newAuthorizationId</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">A client reauthenticates successfully but the authorization ID differs from the original authentication. The connection is closed.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Rejecting oversized SASL authenticate payload</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>mechanism</code>, <code>payloadSize</code>, <code>maxPayloadSize</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">A client sends a SASL authenticate request that exceeds the configured maximum payload size. The connection is closed.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Token expired during authentication</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>mechanism</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">A JWT token’s expiry has already passed by the time authentication completes (for example, due to the fixed auth delay). The connection is closed.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Rejecting request from unauthenticated client</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>reason</code>, <code>requestType</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">A client sends a non-SASL request either without having authenticated or after the session has expired. The <code>reason</code> field indicates whether the client was never authenticated or the session expired. The connection is closed.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">WARN</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Authentication took longer than fixedAuthDelay</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>mechanism</code>, <code>elapsed</code>, <code>fixedAuthDelay</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">The actual authentication work took longer than the configured fixed auth delay, reducing the effectiveness of timing side-channel mitigation. Consider increasing <code>fixedAuthDelay</code>.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">ERROR</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Authentication error</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>sessionId</code>, <code>virtualCluster</code>, <code>mechanism</code>, <code>origin</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">An unexpected internal error occurred during authentication (for example, a failure in the subject builder or the mechanism state machine). The full stack trace is always included.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+     <div class="paragraph">
+      <p>For detailed authentication flow troubleshooting, enable <code>DEBUG</code> logging on <code>io.kroxylicious.filter.sasl.termination</code>.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="oauthbearer_validation_filter_logs">14.4. OAuthBearer Validation filter logs</h3>
+     <div class="paragraph">
+      <p>The <code>OauthBearerValidation</code> filter emits log messages at <code>DEBUG</code> level for authentication events.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <caption class="title">Table 9. OAuthBearer Validation filter log messages</caption>
+      <colgroup>
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+       <col style="width: 25%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Level</th>
+        <th class="tableblock halign-left valign-top">Message</th>
+        <th class="tableblock halign-left valign-top">Structured fields</th>
+        <th class="tableblock halign-left valign-top">When emitted</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">DEBUG</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>SASL Authentication failed</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>error</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">JWT token validation failed (for example, expired token, invalid signature, or audience mismatch). The full stack trace is always included.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">DEBUG</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>SASL error</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>error</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">An unexpected error occurred during the SASL handshake. The full stack trace is always included.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="operational_guidance">14.5. Operational guidance</h3>
+     <div class="paragraph">
+      <p>Use the <code>sessionId</code> field to correlate authentication events with other log messages for the same client connection. This is particularly useful when diagnosing authentication failures in environments with many concurrent connections.</p>
+     </div>
+     <div class="paragraph">
+      <p>To see full stack traces for authentication failures:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>For the SASL Inspection filter, set the log level for <code>io.kroxylicious.filter.sasl.inspection</code> to <code>DEBUG</code>.</p>
+       </li>
+       <li>
+        <p>For the OAuthBearer Validation filter, the filter already logs at <code>DEBUG</code> level, so set the log level for <code>io.kroxylicious.filter.oauthbearer</code> to <code>DEBUG</code>.</p>
+       </li>
+       <li>
+        <p>For runtime authentication announcements, set the log level for <code>io.kroxylicious.proxy.internal</code> to <code>DEBUG</code>.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>For information on configuring log levels, see the monitoring section of the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a>.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">15. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="ref-authentication-glossary-authentication">16. Glossary</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Glossary of terms used in the Client Authentication guide.</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">JWE</dt>
+      <dd>
+       <p>JSON Web Encryption is an <a href="https://datatracker.ietf.org/doc/html/rfc7516">IETF standard</a> for exchanging encrypted data using JSON.</p>
+      </dd>
+      <dt class="hdlist1">JWKS</dt>
+      <dd>
+       <p>JSON Web Key Set is an <a href="https://datatracker.ietf.org/doc/html/rfc7517">IETF standard</a> for representing cryptographic keys in JSON format. A JWKS endpoint publishes the public keys used to verify JWT signatures.</p>
+      </dd>
+      <dt class="hdlist1">JWS</dt>
+      <dd>
+       <p>JSON Web Signature is an <a href="https://datatracker.ietf.org/doc/html/rfc7515">IETF-proposed standard</a> for signing arbitrary data.</p>
+      </dd>
+      <dt class="hdlist1">JWT</dt>
+      <dd>
+       <p>JSON Web Token is an <a href="https://datatracker.ietf.org/doc/html/rfc7519">IETF standard</a> for securely transmitting information between parties as a JSON object.</p>
+      </dd>
+      <dt class="hdlist1">mTLS</dt>
+      <dd>
+       <p>Mutual TLS. A TLS configuration in which both the server and the client present certificates to each other, providing mutual authentication.</p>
+      </dd>
+      <dt class="hdlist1">Principal</dt>
+      <dd>
+       <p>A named identifier that represents one aspect of an authenticated client’s identity, such as a user name or a group membership.</p>
+      </dd>
+      <dt class="hdlist1">PBKDF2</dt>
+      <dd>
+       <p>Password-Based Key Derivation Function 2 is a key derivation function used by SCRAM to derive stored keys from passwords. Defined in <a href="https://datatracker.ietf.org/doc/html/rfc2898">RFC 2898</a>.</p>
+      </dd>
+      <dt class="hdlist1">SASL</dt>
+      <dd>
+       <p>Simple Authentication and Security Layer is an <a href="https://datatracker.ietf.org/doc/html/rfc4422">IETF framework</a> for handling authentication.</p>
+      </dd>
+      <dt class="hdlist1">SASL Passthrough</dt>
+      <dd>
+       <p>A mode in which the proxy forwards SASL authentication exchanges between client and broker without inspecting or modifying them. This is the default behavior.</p>
+      </dd>
+      <dt class="hdlist1">SASL Passthrough Inspection</dt>
+      <dd>
+       <p>A mode in which the proxy observes SASL authentication exchanges to infer the client’s identity without altering the exchange. The broker remains the authority for authentication decisions.</p>
+      </dd>
+      <dt class="hdlist1">SASL Termination</dt>
+      <dd>
+       <p>A mode in which the proxy handles SASL authentication itself, without forwarding to the broker. The proxy validates credentials directly and constructs an authenticated subject on success.</p>
+      </dd>
+      <dt class="hdlist1">SCRAM</dt>
+      <dd>
+       <p>Salted Challenge Response Authentication Mechanism is a family of SASL mechanisms that authenticate clients using a challenge-response protocol. The password is never transmitted. Defined in <a href="https://datatracker.ietf.org/doc/html/rfc5802">RFC 5802</a>.</p>
+      </dd>
+      <dt class="hdlist1">Subject</dt>
+      <dd>
+       <p>The authenticated identity of a client, composed of one or more principals. Used by filters to make identity-aware decisions.</p>
+      </dd>
+     </dl>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

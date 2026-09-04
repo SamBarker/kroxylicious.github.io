@@ -1,0 +1,189 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Get Kroxylicious, the snappy open source proxy for Apache Kafka®, up and running in minutes.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="prerequisites">1. Prerequisites</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Before you begin, ensure you have the following installed and configured.</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p><strong>Java 21+</strong></p>
+       <div class="paragraph">
+        <p>Kroxylicious requires a Java Runtime Environment (JRE) version 21 or higher. To check your version, run:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="bash">java -version</code></pre>
+        </div>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">If this command fails, you may need to install a JRE or add it to your system’s <code>PATH</code> variable.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+      </li>
+      <li>
+       <p><strong>An Apache Kafka® Cluster</strong></p>
+       <div class="paragraph">
+        <p>Kroxylicious needs a running Kafka cluster to proxy.</p>
+       </div>
+       <div class="paragraph">
+        <p>If you don’t have one already, and you have a container engine like <code>docker</code> or <code>podman</code> installed, then the easiest way to deploy a Kafka service is in a container like:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="bash">podman pull apache/kafka:4.3.1
+podman run -p 9092:9092 apache/kafka:4.3.1</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>Otherwise, the official Apache Kafka® <a href="https://kafka.apache.org/quickstart">quick start</a> provides further instructions for setting up a local cluster using the Kafka binary distribution.</p>
+       </div>
+      </li>
+      <li>
+       <p><strong>Kafka Binary Distribution</strong></p>
+       <div class="paragraph">
+        <p>To interact with your Kafka cluster and test the proxy, you will need the Kafka command-line tools. Obtain the <a href="https://archive.apache.org/dist/kafka/4.3.1/kafka_2.13-4.3.1.tgz">binary distribution</a> from the official Apache Kafka website: <a href="https://kafka.apache.org/downloads">Apache Kafka Downloads</a>.</p>
+       </div>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="download_and_install_the_proxy">2. Download and Install the Proxy</h2>
+   <div class="sectionbody">
+    <div class="olist arabic">
+     <ol class="arabic">
+      <li>
+       <p>Download the <a href="https://github.com/kroxylicious/kroxylicious/releases/download/v0.24.0/kroxylicious-app-0.24.0-bin.tar.gz">binary distribution</a> from the <a href="https://github.com/kroxylicious/kroxylicious/releases/v0.24.0">GitHub release page</a>.</p>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="bash">curl -OL https://github.com/kroxylicious/kroxylicious/releases/download/v0.24.0/kroxylicious-app-0.24.0-bin.tar.gz</code></pre>
+        </div>
+       </div>
+      </li>
+      <li>
+       <p>Extract the archive into your desired installation directory.</p>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="bash">tar -zxf kroxylicious-app-0.24.0-bin.tar.gz</code></pre>
+        </div>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="admonitionblock tip">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-tip" title="Tip"></i></td>
+        <td class="content">For Windows, you might find the <a href="https://github.com/kroxylicious/kroxylicious/releases/download/v0.24.0/kroxylicious-app-0.24.0-bin.zip">.zip</a> format easier to work with.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="configure_the_proxy">3. Configure the Proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Kroxylicious uses a YAML file for configuration. You can define virtual clusters, specify target Kafka clusters, and enable filters.</p>
+    </div>
+    <div class="paragraph">
+     <p>For this quick start, we’ll use the example configuration file located at <code>config/example-proxy-config.yaml</code>. This file is pre-configured for a local Kafka cluster running on default ports.</p>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">If your Kafka cluster uses custom ports or runs on a different machine, you’ll need to adjust the settings in the YAML file. See the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more advanced configuration options.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="start_the_proxy">4. Start the Proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>From your Kroxylicious installation directory, run the start script and point it to your configuration file.</p>
+    </div>
+    <div class="listingblock">
+     <div class="content">
+      <pre class="CodeRay highlight"><code data-lang="bash">cd kroxylicious-app-0.24.0
+
+./bin/kroxylicious-start.sh --config config/example-proxy-config.yaml</code></pre>
+     </div>
+    </div>
+    <div class="paragraph">
+     <p>To use a custom configuration, simply replace the file path after the <code>--config</code> flag.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="configure_kafka_clients_to_connect_to_the_proxy">5. Configure Kafka clients to connect to the proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>Finally, point your Kafka clients to the proxy’s bootstrap address and send it some requests.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="create_a_topic">5.1. Create a Topic</h3>
+     <div class="paragraph">
+      <p>Use the <code>kafka-topics.sh</code> client to create a topic named <code>my_topic</code> through the proxy.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="bash">bin/kafka-topics.sh --create --topic my_topic \
+--bootstrap-server localhost:9192</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="produce_a_message">5.2. Produce a Message</h3>
+     <div class="paragraph">
+      <p>Send "hello world" to your new topic using the console producer.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="bash">echo "hello world" | bin/kafka-console-producer.sh --topic my_topic \
+--bootstrap-server localhost:9192</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="consume_the_message">5.3. Consume the Message</h3>
+     <div class="paragraph">
+      <p>Read the message back from your topic using the console consumer.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="bash">bin/kafka-console-consumer.sh --topic my_topic --from-beginning \
+--bootstrap-server localhost:9192</code></pre>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

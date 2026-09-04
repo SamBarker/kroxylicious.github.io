@@ -1,0 +1,438 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-record-validation-guide-record-validation" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Record Validation Filter</strong> to validate records sent by Kafka client to Kafka brokers. Refer to other Kroxylicious guides for information on running the proxy or for advanced topics such as plugin development.</p>
+    </div>
+    <div class="paragraph _abstract">
+     <p>The Record Validation filter validates records sent by a producer. Only records that pass the validation are sent to the broker. This filter can be used to prevent <em>poison messages</em>—such as those containing corrupted data or invalid formats—from entering the Kafka system, which may otherwise lead to consumer failure.</p>
+    </div>
+    <div class="paragraph">
+     <p>The filter currently supports three modes of operation:</p>
+    </div>
+    <div class="olist arabic">
+     <ol class="arabic">
+      <li>
+       <p>Schema Validation ensures the content of the record conforms to a schema stored in an <a href="https://www.apicur.io/registry/">Apicurio Registry</a>.</p>
+      </li>
+      <li>
+       <p>JSON Syntax Validation ensures the content of the record contains syntactically valid JSON.</p>
+      </li>
+      <li>
+       <p>JWS Signature Validation ensures the configured Kafka header contains a valid <a href="https://datatracker.ietf.org/doc/html/rfc7515">JSON Web Signature (JWS)</a> Signature.</p>
+      </li>
+     </ol>
+    </div>
+    <div class="paragraph">
+     <p>Validation rules can be applied to check the content of the Kafka record key or value.</p>
+    </div>
+    <div class="paragraph">
+     <p>If the validation fails, the product request is rejected and the producing application receives an error response. The broker will not receive the rejected records.</p>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">This filter is currently in incubation and available as a preview. We would not recommend using it in a production environment.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="proc-configuring-record-validation-filter-record-validation">1. (Preview) Setting up the Record Validation filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This procedure describes how to set up the Record Validation filter. You provide the filter configuration and rules used to validate Kafka record keys and values.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information about deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+      <li>
+       <p>A <code>ConfigMap</code> for Kroxylicious that includes the configuration required to create a virtual cluster.</p>
+      </li>
+      <li>
+       <p>Apicurio Registry, if you want to use schema validation.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure a filter of type <code>RecordValidation</code>.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>For a standalone proxy deployment, see <a href="#con-example-proxy-config-record-validation">Example proxy configuration file</a>.</p>
+         </li>
+         <li>
+          <p>For a Kubernetes deployment, configure a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-record-validation">Example <code>KafkaProtocolFilter</code> resource</a>.</p>
+         </li>
+        </ul>
+       </div>
+      </li>
+      <li>
+       <p>Replace the <code>&lt;rule definition&gt;</code> token in the YAML configuration with a validation rule that matches your requirements.</p>
+       <div class="paragraph">
+        <p>Choose one of the following rule types:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><strong>Schema validation</strong>, to validate record keys or values against a schema stored in an Apicurio Registry.</p>
+         </li>
+         <li>
+          <p><strong>JSON syntax validation</strong>, to validate that record keys or values contain syntactically valid JSON.</p>
+         </li>
+         <li>
+          <p><strong>JWS Signature validation</strong>, to validate a JSON Web Signature (JWS) provided in a Kafka record header.</p>
+          <div class="paragraph">
+           <p>The following examples show how to configure each rule type.</p>
+          </div>
+          <div class="paragraph">
+           <p>Example schema validation rule:</p>
+          </div>
+          <div class="openblock">
+           <div class="content">
+            <div class="listingblock">
+             <div class="content">
+              <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">schemaValidationConfig</span>:
+  <span class="key">apicurioId</span>: <span class="string"><span class="content">1001</span></span>
+  <span class="key">apicurioRegistryUrl</span>: <span class="string"><span class="content">http://registry.local:8080</span></span>
+  <span class="key">schemaType</span>: <span class="string"><span class="content">JSON_SCHEMA</span></span>
+  <span class="key">tls</span>:
+    <span class="key">trust</span>:
+      <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/proxy/trust/ca.p12</span></span>
+      <span class="key">storePassword</span>:
+        <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/proxy/trust/store.password</span></span>
+      <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+<span class="key">allowNulls</span>: <span class="string"><span class="content">true</span></span>
+<span class="key">allowEmpty</span>: <span class="string"><span class="content">true</span></span></code></pre>
+             </div>
+            </div>
+            <div class="ulist">
+             <ul>
+              <li>
+               <p><code>apicurioId</code> identifies the schema that the filter enforces. This ID refers to the Apicurio Registry’s <code>contentId</code>. If the record key or value does not conform to the schema identified by this ID, the record is rejected. If a Kafka producer embeds a schema ID in the record (either in a header or <em>magic</em> bytes at the start of the record’s key or value), the filter validates it against this value. The record is rejected if the IDs do not match.</p>
+              </li>
+              <li>
+               <p><code>apicurioRegistryUrl</code> specifies the endpoint URL for the Apicurio Registry.</p>
+              </li>
+              <li>
+               <p><code>schemaType</code> specifies the type of schema to validate against. Supported values are:</p>
+               <div class="ulist">
+                <ul>
+                 <li>
+                  <p><code>JSON_SCHEMA</code> — validates against a JSON Schema (default if not specified).</p>
+                 </li>
+                 <li>
+                  <p><code>AVRO</code> — validates against an Apache Avro schema.</p>
+                 </li>
+                 <li>
+                  <p><code>PROTOBUF</code> — validates against a Protocol Buffers schema.</p>
+                 </li>
+                </ul>
+               </div>
+              </li>
+              <li>
+               <p><code>tls</code> specifies the optional TLS configuration used when connecting securely to the Apicurio Registry.</p>
+               <div class="ulist">
+                <ul>
+                 <li>
+                  <p><code>storeFile</code> path to the truststore file that contains the trust anchors used to validate the server connection.</p>
+                 </li>
+                 <li>
+                  <p><code>storePassword</code> (Optional) password used to protect the truststore.</p>
+                 </li>
+                 <li>
+                  <p><code>storeType</code> truststore type. Supported values include <code>PKCS12</code>, <code>JKS</code>, and <code>PEM</code>.</p>
+                 </li>
+                </ul>
+               </div>
+              </li>
+              <li>
+               <p><code>allowNulls</code> specifies whether the validator allows record keys or values to be <code>null</code>. The default is <code>false</code>.</p>
+              </li>
+              <li>
+               <p><code>allowEmpty</code> specifies whether the validator allows record keys or values to be empty. The default is <code>false</code>.</p>
+              </li>
+             </ul>
+            </div>
+            <div class="paragraph">
+             <p>For more information about embedding the ID in a record, see the <a href="https://www.apicur.io/registry/docs/apicurio-registry/3.1.x//getting-started/assembly-using-kafka-client-serdes.html#_consumer_schema_configuration" target="_blank" rel="noopener">Apicurio documentation</a>.</p>
+            </div>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>Example JSON syntax validation rule:</p>
+          </div>
+          <div class="openblock">
+           <div class="content">
+            <div class="listingblock">
+             <div class="content">
+              <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">syntacticallyCorrectJson</span>:
+  <span class="key">validateObjectKeysUnique</span>: <span class="string"><span class="content">true</span></span>
+<span class="key">allowNulls</span>: <span class="string"><span class="content">true</span></span>
+<span class="key">allowEmpty</span>: <span class="string"><span class="content">true</span></span></code></pre>
+             </div>
+            </div>
+            <div class="ulist">
+             <ul>
+              <li>
+               <p><code>syntacticallyCorrectJson.validateObjectKeysUnique</code> specifies whether JSON object keys must be unique. The default is <code>false</code>.</p>
+              </li>
+              <li>
+               <p><code>allowNulls</code> specifies whether the validator allows record keys or values to be <code>null</code>. The default is <code>false</code>.</p>
+              </li>
+              <li>
+               <p><code>allowEmpty</code> specifies whether the validator allows record keys or values to be empty. The default is <code>false</code>.</p>
+              </li>
+             </ul>
+            </div>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This rule rejects records that contain syntactically invalid JSON in the record key or value.</p>
+          </div>
+          <div class="paragraph">
+           <p>Example JWS Signature validation rule:</p>
+          </div>
+          <div class="openblock">
+           <div class="content">
+            <div class="listingblock">
+             <div class="content">
+              <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">jwsSignatureValidation</span>:
+  <span class="key">trustedJsonWebKeySet</span>: <span class="string"><span class="delimiter">|</span><span class="content">
+    {
+      "keys": [
+        {
+          "kty": "RSA",
+          "kid": "RSA JWK",
+          "key_ops": [ "verify" ],
+          "alg": "RS256",
+          "n": "lx-5h_lkVJGc8-NxgKGkfxobBlM7DDCjqAloEieCf8c9KbPJ12V0Bm8arOX-lm0wRSLxmWzQ3NTM6S9pDbSc7fQt77THlMD1zEDMwIAJxfoMt3U_VrMHVdiOvO6YpU3jWBp7BfQNYHJjCSiaxIHqDPuDCh2GTflkU32Nfim7W3iLBuH4_K8ADYHz3QdeX29vzl49PDbUiiJEsjnEconsfuYjrFaN3uGn41mGzjedc7oxlcID8fDxq5bvZvOFBAIqdrxs5qPYw1QlVupB3LT0AMU1qKWOB_vkM1n54eDIxP9Xd__WnvX4wagYqA1OZ9LPBenhBX7_Rbnrap2QNQ58-Q",
+          "e": "AQAB"
+        },
+        {
+          "kty": "EC",
+          "kid": "EC JWK",
+          "key_ops": [ "verify" ],
+          "crv": "P-256",
+          "alg": "ES256",
+          "x": "f83OJ3D2xF4h2Jm2VvZd7uKQ6GFDp4zQpN9qzZPJxG8",
+          "y": "x_FEzRu9PZxC5H5KJ5-3HqWQX5J8V4a5j8nY1JvG9r0"
+        }
+      ]
+    }</span></span>
+  <span class="key">algorithms</span>:
+    <span class="key">allowed</span>:
+      - <span class="string"><span class="content">ES256</span></span>
+      - <span class="string"><span class="content">RS256</span></span>
+  <span class="key">recordHeader</span>:
+    <span class="key">key</span>: <span class="string"><span class="content">kroxylicious.io/jws</span></span>
+    <span class="key">required</span>: <span class="string"><span class="content">true</span></span>
+  <span class="key">content</span>:
+    <span class="key">detached</span>: <span class="string"><span class="content">false</span></span></code></pre>
+             </div>
+            </div>
+            <div class="ulist">
+             <ul>
+              <li>
+               <p><code>jwsSignatureValidation.trustedJsonWebKeySet</code> specifies the set of JSON Web Keys (JWK) used to verify <a href="https://datatracker.ietf.org/doc/html/rfc7515">JSON Web Signature (JWS)</a> signatures.</p>
+              </li>
+              <li>
+               <p>The JWS Signature validation rule verifies the JWS only and does not perform <a href="https://datatracker.ietf.org/doc/html/rfc7519">JSON Web Token (JWT)</a> claim validation. Token claims such as expiration and issuer are not checked.</p>
+              </li>
+              <li>
+               <p><code>jwsSignatureValidation.algorithms.allowed</code> and <code>jwsSignatureValidation.algorithms.denied</code> specify which signature algorithms are permitted.</p>
+               <div class="ulist">
+                <ul>
+                 <li>
+                  <p>If both <code>allowed</code> and <code>denied</code> are omitted or empty, all algorithms are blocked and JWS Signature verification fails.</p>
+                 </li>
+                 <li>
+                  <p>If only <code>allowed</code> is specified, only the algorithms listed in <code>allowed</code> are permitted.</p>
+                 </li>
+                 <li>
+                  <p>If only <code>denied</code> is specified, all algorithms except those listed in <code>denied</code> are permitted.</p>
+                 </li>
+                 <li>
+                  <p>If both <code>allowed</code> and <code>denied</code> are specified, only the algorithms listed in <code>allowed</code> are permitted.</p>
+                 </li>
+                </ul>
+               </div>
+              </li>
+              <li>
+               <p><code>jwsSignatureValidation.recordHeader.key</code> specifies the Kafka record header key that contains the JWS. The default value is <code>kroxylicious.io/jws</code>.</p>
+              </li>
+              <li>
+               <p><code>jwsSignatureValidation.recordHeader.required</code> specifies whether the JWS record header must be present. If set to <code>false</code>, validation is skipped when the header is missing.</p>
+              </li>
+              <li>
+               <p><code>jwsSignatureValidation.content.detached</code> specifies whether the record buffer is used as the JWS payload (detached content, as defined in <a href="https://datatracker.ietf.org/doc/html/rfc7515#appendix-F">RFC 7515 Appendix F</a>).</p>
+              </li>
+             </ul>
+            </div>
+           </div>
+          </div>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-record-validation">1.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration. Here’s a complete example of a <code>filterDefinitions</code> entry configured for record validation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-record-validation</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">RecordValidation</span></span>
+    <span class="key">config</span>:
+        <span class="key">rules</span>:
+        - <span class="string"><span class="content">topicNames:</span><span class="content">
+            - &lt;topic name&gt;</span></span>
+          <span class="key">keyRule</span>:
+            <span class="error">&lt;rule definition&gt;</span>
+          <span class="key">valueRule</span>:
+            <span class="error">&lt;rule definition&gt;</span>
+        <span class="key">defaultRule</span>:
+          <span class="key">keyRule</span>:
+            <span class="error">&lt;rule definition&gt;</span>
+          <span class="key">valueRule</span>:
+            <span class="error">&lt;rule definition&gt;</span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>topicNames</code> provides the list of topic names to which the validation rules are applied.</p>
+       </li>
+       <li>
+        <p><code>keyRule</code> provides the validation rules that are applied to the record’s key.</p>
+       </li>
+       <li>
+        <p><code>valueRule</code> provides the validation rules that are applied to the record’s value.</p>
+       </li>
+       <li>
+        <p><code>defaultRule</code> provides the default rule that is applied to any topics for which there is no explicit rule defined.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-record-validation">1.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for record validation:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProtocolFilter</code> resource for record validation
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-validation-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">RecordValidation</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">rules</span>:
+    - <span class="string"><span class="content">topicNames:</span><span class="content">
+        - &lt;topic name&gt;</span></span>
+      <span class="key">keyRule</span>:
+        <span class="error">&lt;rule definition&gt;</span>
+      <span class="key">valueRule</span>:
+        <span class="error">&lt;rule definition&gt;</span>
+    <span class="key">defaultRule</span>:
+      <span class="key">keyRule</span>:
+        <span class="error">&lt;rule definition&gt;</span>
+      <span class="key">valueRule</span>:
+        <span class="error">&lt;rule definition&gt;</span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>topicNames</code> provides the list of topic names to which the validation rules are applied.</p>
+       </li>
+       <li>
+        <p><code>keyRule</code> provides the validation rules that are applied to the record’s key.</p>
+       </li>
+       <li>
+        <p><code>valueRule</code> provides the validation rules that are applied to the record’s value.</p>
+       </li>
+       <li>
+        <p><code>defaultRule</code> provides the default rule applied to topics for which there is no explicit rule defined.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">2. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}
