@@ -1,0 +1,3466 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h3 id="con-about-operator-guide-operator" class="discrete _abstract">About this guide</h3>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Operator</strong> to configure, deploy, secure, and operate the Kroxylicious Proxy on Kubernetes. Refer to other Kroxylicious guides for information on running the proxy outside Kubernetes or for advanced topics such as plugin development.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-overview-operator">1. Kroxylicious Operator overview</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Kroxylicious Proxy is an Apache Kafka protocol-aware ("Layer 7") proxy designed to enhance Kafka-based systems.</p>
+    </div>
+    <div class="paragraph">
+     <p>The Kroxylicious Operator is an <em>operator</em> for Kubernetes which simplifies deploying and operating the Kroxylicious Proxy.</p>
+    </div>
+    <div class="ulist _additional-resources">
+     <div class="title">Additional resources</div>
+     <ul>
+      <li>
+       <p><a href="https://kubernetes.io/" target="_blank" rel="noopener">Kubernetes website</a></p>
+      </li>
+      <li>
+       <p><a href="https://kubernetes.io/docs/concepts/extend-kubernetes/operator/" target="_blank" rel="noopener">Operators</a></p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-api-operator">2. API concepts</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The Kroxylicious Operator uses a declarative API based on Kubernetes custom resources to manage proxy deployments.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="api_resources_used_by_the_kroxylicious_proxy">2.1. API resources used by the Kroxylicious Proxy</h3>
+     <div class="paragraph _abstract">
+      <p>The operator takes custom resources and core Kubernetes resources as inputs:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">
+        <code>KafkaProxy</code>
+       </dt>
+       <dd>
+        <p>Defines an instance of the proxy.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>VirtualKafkaCluster</code>
+       </dt>
+       <dd>
+        <p>Represents a logical Kafka cluster that will be exposed to Kafka clients.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>KafkaProxyIngress</code>
+       </dt>
+       <dd>
+        <p>Configures how a virtual cluster is exposed on the network to Kafka clients.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>KafkaService</code>
+       </dt>
+       <dd>
+        <p>Specifies a <em>backend</em> Kafka cluster for a virtual cluster.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>KafkaProtocolFilter</code>
+       </dt>
+       <dd>
+        <p>Specifies filter mechanisms for use with a virtual cluster.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>Secret</code>
+       </dt>
+       <dd>
+        <p><code>KafkaService</code> and <code>KafkaProtocolFilter</code> resources may reference a <code>Secret</code> to provide security-sensitive data such as TLS certificates or passwords.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>ConfigMap</code>
+       </dt>
+       <dd>
+        <p><code>KafkaService</code> and <code>KafkaProtocolFilter</code> resources may reference a <code>ConfigMap</code> to provide non-sensitive configuration such as trusted CA certificates.</p>
+       </dd>
+      </dl>
+     </div>
+     <div class="imageblock">
+      <div class="content">
+       <img src="../images/operator-input-resource-topology.svg" alt="Diagram showing the input resources, KafkaProxy, VirtualKafkaCluster, etc, as boxes, connected by arrows representing the references between the resources.">
+      </div>
+      <div class="title">Figure 1. Example input resources and the references between them</div>
+     </div>
+     <div class="paragraph">
+      <p>Based on the input resources, the operator generates the core Kubernetes resources needed to deploy the Kroxylicious Proxy, such as the following:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">
+        <code>ConfigMap</code>
+       </dt>
+       <dd>
+        <p>Provides the proxy configuration file mounted into the proxy container.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>Deployment</code>
+       </dt>
+       <dd>
+        <p>Manages the proxy <code>Pod</code> and container.</p>
+       </dd>
+       <dt class="hdlist1">
+        <code>Service</code>
+       </dt>
+       <dd>
+        <p>Exposes the proxy over the network to other workloads in the same Kubernetes cluster.</p>
+       </dd>
+      </dl>
+     </div>
+     <div class="paragraph">
+      <p>The API is decomposed into multiple custom resources in a similar way to the Kubernetes Gateway API, and for similar reasons. You can make use of Kubernete’s Role-Based Access Control (RBAC) to divide responsibility for different aspects of the overall proxy functionality to different roles (people) in your organization.</p>
+     </div>
+     <div class="paragraph">
+      <p>For example, you might grant networking engineers the ability to configure <code>KafkaProxy</code> and <code>KafkaProxyIngress</code>, while giving application developers the ability to configure <code>VirtualKafkaCluster</code>, <code>KafkaService</code>, and <code>KafkaProtocolFilter</code> resources.</p>
+     </div>
+     <div class="imageblock">
+      <div class="content">
+       <img src="../images/operator-output-resource-topology.svg" alt="Diagram showing the output resources, Deployment, Pod, ConfigMap, Service, with arrows showing the Deployment managing the Pod, the Pod mounting the ConfigMap, and the Service selecting the Pod.">
+      </div>
+      <div class="title">Figure 2. Generated Kubernetes resources and the relationships between them</div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-api-compatibility-operator-operator">2.2. Custom resource API compatibility</h3>
+     <div class="paragraph _abstract">
+      <p>Kroxylicious custom resource definitions are packaged and deployed alongside the operator. Currently, there’s only a single version of the custom resource APIs: <code>v1alpha1</code>.</p>
+     </div>
+     <div class="paragraph">
+      <p>Future updates to the operator may introduce new versions of the custom resource APIs. At that time the operator will be backwards compatible with older versions of those APIs and an upgrade procedure will be used to upgrade existing custom resources to the new API version.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-install-operator">3. Installing the Kroxylicious Operator</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section provides instructions for installing the Kroxylicious Operator.</p>
+    </div>
+    <div class="paragraph">
+     <p>Install the proxy operator by applying the proxy installation files</p>
+    </div>
+    <div class="paragraph">
+     <p>Installation options and procedures are demonstrated using the example files included with Kroxylicious.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="con-install-prereqs-operator">3.1. Install prerequisites</h3>
+     <div class="paragraph _abstract">
+      <p>To install Kroxylicious, you will need the following:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>A Kubernetes 1.31 or later cluster. For development purposes, <a href="https://minikube.sigs.k8s.io/">Minikube</a> may be used.</p>
+       </li>
+       <li>
+        <p>The <code>kubectl</code> command-line tool to be installed and configured to connect to the running cluster.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>For more information on the tools available for running Kubernetes, see <a href="https://kubernetes.io/docs/tasks/tools/" target="_blank" rel="noopener">Install Tools</a> in the Kubernetes documentation.</p>
+     </div>
+     <h4 id="oc_and_kubectl_commands" class="discrete"><code>oc</code> and <code>kubectl</code> commands</h4>
+     <div class="paragraph">
+      <p>The <code>oc</code> command functions as an alternative to <code>kubectl</code>. In almost all cases the example <code>kubectl</code> commands used in this guide can be done using <code>oc</code> simply by replacing the command name (options and arguments remain the same).</p>
+     </div>
+     <div class="paragraph">
+      <p>In other words, instead of using:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="shell">kubectl apply -f <em>your-file</em></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>when using OpenShift you can use:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="shell">oc apply -f <em>your-file</em></code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-install-product-downloads-operator">3.2. Kroxylicious release artifacts</h3>
+     <div class="paragraph _abstract">
+      <p>To use YAML manifest files to install Kroxylicious, download kroxylicious-operator-0.24.0.zip or kroxylicious-operator-0.24.0.tar.gz file from the <a href="https://github.com/kroxylicious/kroxylicious/releases/v0.24.0" target="_blank" rel="noopener">GitHub release page</a>, and extract the files as appropriate (for example using <code>unzip</code> or <code>tar -xzf</code>).</p>
+     </div>
+     <div class="paragraph">
+      <p>Each of these archives contains:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Installation Files</dt>
+       <dd>
+        <p>In the <code>install</code> directory are the YAML manifests needed to install the operator.</p>
+       </dd>
+       <dt class="hdlist1">Examples</dt>
+       <dd>
+        <p>In the <code>examples</code> directory are examples of the custom resources which can be used to deploy a proxy once the operator has been installed.</p>
+       </dd>
+      </dl>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="proc-install-operator-operator">3.3. Installing the operator using installation files</h3>
+     <div class="paragraph _abstract">
+      <p>This procedure shows how to install the Kroxylicious Operator in your Kubernetes cluster.</p>
+     </div>
+     <div class="ulist">
+      <div class="title">Prerequisites</div>
+      <ul>
+       <li>
+        <p>You need an account with permission to create and manage <code>CustomResourceDefinition</code> and RBAC (<code>ClusterRole</code>) resources.</p>
+       </li>
+       <li>
+        <p>You have downloaded the <a href="#con-install-product-downloads-operator">release artifacts</a> and extracted the contents into the current directory.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="olist arabic">
+      <div class="title">Procedure</div>
+      <ol class="arabic">
+       <li>
+        <p>Edit the Kroxylicious installation files to use the namespace the operator is going to be installed into.</p>
+        <div class="paragraph">
+         <p>For example, in this procedure the operator is installed into the namespace <code>my-kroxylicious-operator-namespace</code>.</p>
+        </div>
+       </li>
+      </ol>
+     </div>
+     <div class="paragraph">
+      <p>On Linux, use:</p>
+     </div>
+     <div class="paragraph">
+      <p>+</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>sed -i 's/namespace: .*/namespace: my-kroxylicious-operator-namespace/' install/*.yaml</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>+ On MacOS, use:</p>
+     </div>
+     <div class="paragraph">
+      <p>+</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>sed -i '' 's/namespace: .*/namespace: my-kroxylicious-operator-namespace/' install/*.yaml</code></pre>
+      </div>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>Deploy the Kroxylicious operator:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">kubectl create -f install</code></pre>
+         </div>
+        </div>
+       </li>
+       <li>
+        <p>Check the status of the deployment:</p>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">kubectl get deployments -n my-kroxylicious-operator-namespace</code></pre>
+         </div>
+        </div>
+        <div class="listingblock">
+         <div class="title">Output shows the deployment name and readiness</div>
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">NAME                      READY  UP-TO-DATE  AVAILABLE
+kroxylicious-operator     1/1    1           1</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p><code>READY</code> shows the number of replicas that are ready/expected. The deployment is successful when the <code>AVAILABLE</code> output shows <code>1</code>.</p>
+        </div>
+       </li>
+      </ol>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-deploy-a-proxy-operator">4. Deploying a proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Deploy a basic proxy instance with a single virtual cluster exposed to Kafka clients on the same Kubernetes cluster.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="prerequisites">4.1. Prerequisites</h3>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>The Kroxylicious Operator is installed in the Kubernetes cluster.</p>
+       </li>
+       <li>
+        <p>A Kafka cluster is available to be proxied.</p>
+       </li>
+       <li>
+        <p>TLS certificate generation capability is available for ingress configurations that require TLS.</p>
+       </li>
+       <li>
+        <p>DNS management access is available for ingress configurations that require off-cluster access.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="the_required_resources">4.2. The required resources</h3>
+     <div class="sect3">
+      <h4 id="con-kafkaproxy-operator">4.2.1. Proxy configuration to host virtual clusters</h4>
+      <div class="paragraph _abstract">
+       <p>A <code>KafkaProxy</code> resource represents an instance of the Kroxylicious Proxy. Conceptually, it is the top-level resource that links together <code>KafkaProxyIngress</code>, <code>VirtualKafkaCluster</code>, <code>KafkaService</code>, and <code>KafkaProtocolFilter</code> resources to form a complete working proxy.</p>
+      </div>
+      <div class="paragraph">
+       <p><code>KafkaProxy</code> resources are referenced by <code>KafkaProxyIngress</code> and <code>VirtualKafkaCluster</code> resources to define how the proxy is exposed and what it proxies.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaProxy</code> configuration
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxy</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+<span class="key">spec</span>: <span class="string"><span class="content">{}</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>An empty <code>spec</code> creates a proxy with default configuration.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-kafkaproxyingress-overview-operator">4.2.2. Networking configuration</h4>
+      <div class="paragraph _abstract">
+       <p>A <code>KafkaProxyIngress</code> resource defines the networking configuration that allows Kafka clients to connect to a <code>VirtualKafkaCluster</code>.</p>
+      </div>
+      <div class="paragraph">
+       <p>It is uniquely associated with a single <code>KafkaProxy</code> instance, but it is not uniquely associated with a <code>VirtualKafkaCluster</code> and can be used by multiple <code>VirtualKafkaCluster</code> instances.</p>
+      </div>
+      <div class="paragraph">
+       <p>The <code>KafkaProxyIngress</code> resource supports the following ingress types to configure networking access to the virtual cluster:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>clusterIP</code> exposes the virtual cluster to applications running inside the same Kubernetes cluster as the proxy.</p>
+        </li>
+        <li>
+         <p><code>loadBalancer</code> exposes the virtual cluster to applications running outside the Kubernetes cluster.</p>
+        </li>
+        <li>
+         <p><code>openShiftRoute</code> exposes the virtual cluster to applications running outside the OpenShift cluster by using OpenShift Routes (OpenShift only)</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The <code>clusterIP</code> ingress types support both TCP (plain) and TLS connections. The <code>loadBalancer</code> and <code>openShiftRoute</code> types support only TLS.</p>
+      </div>
+      <div class="paragraph">
+       <p>When using TLS, you specify a TLS server certificate in the ingress configuration of the <code>VirtualKafkaCluster</code> resource.</p>
+      </div>
+      <div class="paragraph">
+       <p>When using <code>loadBalancer</code>, changes to your DNS may be required.</p>
+      </div>
+      <div class="paragraph">
+       <p>The following table summarizes the supported ingress types.</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <caption class="title">Table 1. Supported ingress types</caption>
+       <colgroup>
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Ingress Type</th>
+         <th class="tableblock halign-left valign-top">Use case</th>
+         <th class="tableblock halign-left valign-top">Supported Transport</th>
+         <th class="tableblock halign-left valign-top">Requires DNS changes?</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>clusterIP</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">On-cluster applications</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">TCP/TLS</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">No</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>loadBalancer</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Off-cluster applications</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">TLS only</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Yes</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>openShiftRoute</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Off-cluster applications</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">TLS only</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">No (hostnames are assigned by OpenShift)</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">TLS is recommended when connecting applications in a production environment.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="sect4">
+       <h5 id="clusterip_ingress_type"><code>clusterIP</code> ingress type</h5>
+       <div class="paragraph">
+        <p>The <code>clusterIP</code> ingress type exposes virtual clusters to Kafka clients running in the same Kubernetes cluster as the proxy. It supports both TCP (plain) and TLS connections.</p>
+       </div>
+       <div class="paragraph">
+        <p>The <code>clusterIP</code> ingress type uses Kubernetes <code>Service</code> resources of type <code>ClusterIP</code> to enable on-cluster access.</p>
+       </div>
+       <div class="listingblock">
+        <div class="title">
+         Example <code>KafkaProxyIngress</code> configuration for <code>clusterIP</code> with TCP
+        </div>
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">cluster-ip</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">clusterIP</span>:
+    <span class="key">protocol</span>: <span class="string"><span class="content">TCP</span></span></code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>proxyRef</code> identifies the <code>KafkaProxy</code> resource that this ingress is part of.</p>
+         </li>
+         <li>
+          <p><code>clusterIP</code> specifies <code>clusterIP</code> networking.</p>
+         </li>
+         <li>
+          <p><code>protocol</code> defines the connection protocol as plain <code>TCP</code>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="listingblock">
+        <div class="title">
+         Example <code>KafkaProxyIngress</code> configuration for <code>clusterIP</code> with TLS
+        </div>
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">cluster-ip</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">clusterIP</span>:
+    <span class="key">protocol</span>: <span class="string"><span class="content">TLS</span></span></code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>protocol</code> defines the connection protocol as <code>TLS</code> to enable encrypted communication between clients and the proxy.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>When using TLS, specify a <a href="#con-virtualkafkacluster-clusterip-generate-tls-certificates-operator">TLS server certificate</a> in the <a href="#con-virtualkafkacluster-overview-operator">ingress configuration</a> of the <code>VirtualKafkaCluster</code> resource using a <code>certificateRef</code>.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="loadbalancer_ingress_type"><code>loadBalancer</code> ingress type</h5>
+       <div class="paragraph">
+        <p>The <code>loadBalancer</code> ingress type allows applications running off-cluster to connect to the virtual cluster. TLS must be used with this ingress type.</p>
+       </div>
+       <div class="paragraph">
+        <p>The <code>loadBalancer</code> ingress type uses Kubernetes <code>Service</code> resources of type <code>LoadBalancer</code> to enable off-cluster access.</p>
+       </div>
+       <div class="paragraph">
+        <p>When using a loadBalancer ingress, the proxy uses SNI (Server Name Indication) to match the client’s requested host name to the correct virtual cluster and broker within the proxy. This means that every virtual cluster and every broker within the virtual cluster <strong>must</strong> be uniquely identifiable within DNS. To accomplish this, the following configuration must be provided:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>A unique <code>bootstrapAddress</code>. This is the address that the clients initially use to connect to the virtual cluster.</p>
+         </li>
+         <li>
+          <p>An <code>advertisedBrokerAddressPattern</code> that generates unique broker addresses which clients use to connect to individual brokers.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>You decide how to formulate the <code>bootstrapAddress</code> and the <code>advertisedBrokerAddressPattern</code> to best fit the networking conventions of your organization.</p>
+       </div>
+       <div class="paragraph">
+        <p>The <code>advertisedBrokerAddressPattern</code> <strong>must</strong> contain the token <code>$(nodeId)</code>. The proxy replaces this token with the broker’s node ID. This ensures that client connections are correctly routed to the intended broker.</p>
+       </div>
+       <div class="paragraph">
+        <p>Both <code>bootstrapAddress</code> and <code>advertisedBrokerAddressPattern</code> <strong>may</strong> contain the token <code>$(virtualClusterName)</code>. If this is present, it is replaced by the virtual cluster’s name. This token is necessary when the <code>KafkaProxyIngress</code> is being shared by many virtual clusters.</p>
+       </div>
+       <div class="paragraph">
+        <p>One possible scheme is to use the virtual cluster’s name as a subdomain within your organisation’s domain name:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="text">$(virtualClusterName).kafkaproxy.example.com</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>You can then use a further subdomain for each broker:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="text">broker-$(nodeId).$(virtualClusterName).kafkaproxy.example.com</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>You can use other naming schemes, as long as each address remains unique.</p>
+       </div>
+       <div class="listingblock">
+        <div class="title">
+         Example <code>KafkaProxyIngress</code> configuration for <code>loadBalancer</code>
+        </div>
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">load-balancer</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">loadBalancer</span>:
+    <span class="key">bootstrapAddress</span>: <span class="string"><span class="delimiter">"</span><span class="content">$(virtualClusterName).kafkaproxy.example.com</span><span class="delimiter">"</span></span>
+    <span class="key">advertisedBrokerAddressPattern</span>: <span class="string"><span class="delimiter">"</span><span class="content">broker-$(nodeId).$(virtualClusterName).kafkaproxy.example.com</span><span class="delimiter">"</span></span></code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>proxyRef</code> identifies the <code>KafkaProxy</code> resource that this ingress is part of.</p>
+         </li>
+         <li>
+          <p><code>loadBalancer</code> specifies <code>loadBalancer</code> networking.</p>
+         </li>
+         <li>
+          <p><code>bootstrapAddress</code> specifies the bootstrap address for clients to connect to the virtual cluster.</p>
+         </li>
+         <li>
+          <p><code>advertisedBrokerAddressPattern</code> specifies the advertised broker address used by the proxy to generate the individual broker addresses presented to the client.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>Specify a <a href="#con-virtualkafkacluster-loadbalancer-generate-tls-certificates-operator">TLS server certificate</a> in the <a href="#con-virtualkafkacluster-overview-operator">ingress configuration</a> of the <code>VirtualKafkaCluster</code> resource by using a <code>certificateRef</code>.</p>
+       </div>
+       <div class="paragraph">
+        <p>You must also <a href="#proc-virtualkafkacluster-loadbalancer-dns-config-operator">configure DNS</a> so that the bootstrap and broker address resolve from the network used by the applications.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="openshiftroute_ingress_type"><code>openShiftRoute</code> ingress type</h5>
+       <div class="admonitionblock important">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+           <td class="content">OpenShift Routes are available only on OpenShift and are not supported on Kubernetes environments. The Kroxylicious Operator detects whether the OpenShift Route API is available on the Kubernetes server. If it is not available, the operator rejects configurations that use this ingress type.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="paragraph">
+        <p>The <code>openShiftRoute</code> ingress type allows applications running off-cluster to connect to the virtual cluster. TLS must be used with this ingress type.</p>
+       </div>
+       <div class="paragraph">
+        <p>The <code>openShiftRoute</code> ingress type uses OpenShift <code>Route</code> resources to enable off-cluster access.</p>
+       </div>
+       <div class="paragraph">
+        <p>When using an <code>openShiftRoute</code> ingress, the proxy uses SNI (Server Name Indication) to match the client’s requested host name to the correct virtual cluster and broker within the proxy.</p>
+       </div>
+       <div class="paragraph">
+        <p>The bootstrap and broker addresses are generated automatically, for example:</p>
+       </div>
+       <div class="listingblock">
+        <div class="title">Example bootstrap and broker addresses</div>
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="text">your-cluster-bootstrap.ingress-domain:443
+your-cluster-0.ingress-domain:443
+your-cluster-1.ingress-domain:443
+your-cluster-2.ingress-domain:443</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>The bootstrap address follows this pattern: <code>&lt;virtualClusterName&gt;-bootstrap.&lt;ingressDomain&gt;:443</code></p>
+         </li>
+         <li>
+          <p>The broker address follows this pattern: <code>&lt;virtualClusterName&gt;-&lt;nodeId&gt;.&lt;ingressDomain&gt;:443</code></p>
+         </li>
+        </ul>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">The bootstrap and broker addresses may contain different ingress domains if <a href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/ingress_and_load_balancing/routes#nw-ingress-sharding-route-configuration_creating-basic-routes" target="_blank" rel="noopener">Ingress Controller sharding</a> is used.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="listingblock">
+        <div class="title">
+         Example <code>KafkaProxyIngress</code> configuration for <code>openShiftRoute</code>
+        </div>
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">openshift-route</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">openShiftRoute</span>: <span class="string"><span class="content">{}</span></span></code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>spec.openShiftRoute</code> exposes the proxy to off-cluster clients using OpenShift Routes.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>Specify a <a href="#con-virtualkafkacluster-openshiftroute-generate-tls-certificates-operator">TLS server certificate</a> in the <a href="#con-virtualkafkacluster-overview-operator">ingress configuration</a> of the <code>VirtualKafkaCluster</code> resource by using a <code>certificateRef</code>.</p>
+       </div>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-kafkaservice-by-bootstrap-operator">4.2.3. Configuration for proxied Kafka clusters</h4>
+      <div class="paragraph _abstract">
+       <p>A proxied Kafka cluster is configured in a <code>KafkaService</code> resource, which specifies how the proxy connects to the cluster. The Kafka cluster may or may not be running in the same Kubernetes cluster as the proxy: Network connectivity is all that’s required.</p>
+      </div>
+      <div class="paragraph">
+       <p>This example shows a <code>KafkaService</code> defining how to connect to a Kafka cluster at <code>kafka.example.com</code>.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaService</code> configuration
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaService</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">bootstrapServers</span>: <span class="string"><span class="content">kafka.example.com:9092</span></span>
+  <span class="key">nodeIdRanges</span>:
+    - <span class="string"><span class="content">name: brokers</span></span>
+      <span class="key">start</span>: <span class="string"><span class="content">0</span></span>
+      <span class="key">end</span>: <span class="string"><span class="content">5</span></span>
+  <span class="comment"># ...</span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>bootstrapServers</code> specifies a comma-separated list of addresses in <code>&lt;host&gt;:&lt;port&gt;</code> format. Including multiple broker addresses helps clients connect when one is unavailable.</p>
+        </li>
+        <li>
+         <p><code>nodeIdRanges</code> declares the IDs of all the broker nodes in the Kafka cluster</p>
+        </li>
+        <li>
+         <p><code>name</code> is optional, but specifying it can make errors easier to diagnose.</p>
+        </li>
+        <li>
+         <p><code>start</code> defines the start of the ID range, inclusive.</p>
+        </li>
+        <li>
+         <p><code>end</code> defines the end of the ID range, inclusive.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-virtualkafkacluster-overview-operator">4.2.4. Virtual cluster configuration</h4>
+      <div class="paragraph _abstract">
+       <p>A <code>VirtualKafkaCluster</code> resource defines a logical Kafka cluster that is accessible to clients over the network.</p>
+      </div>
+      <div class="paragraph">
+       <p>The virtual cluster references the following resources, which must be in the same namespace:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>A <code>KafkaProxy</code> resource that the proxy is part of.</p>
+        </li>
+        <li>
+         <p>One or more <code>KafkaProxyIngress</code> resources that expose the virtual cluster to Kafka clients and provide virtual-cluster-specific configuration to the ingress (such as TLS certificates and other parameters).</p>
+        </li>
+        <li>
+         <p>A <code>KafkaService</code> resource that defines the backend Kafka cluster.</p>
+        </li>
+        <li>
+         <p>One or more <code>KafkaProtocolFilter</code> resources that filter the Kafka protocol traffic between clients and the backend Kafka cluster. The order of the filters in the <code>filterRefs</code> array defines the order that the filters are applied. Client requests pass through the filters starting at index <code>0</code>, then <code>1</code>, and continuing to index <code>n</code>. Broker responses pass through the same filters in the reverse order. If the <code>filterRefs</code> array is empty (or null), the traffic will pass through the cluster unchanged.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The following example shows configuration for a <code>VirtualKafkaCluster</code> that is exposed it to Kafka clients running on the same Kubernetes cluster. Protocol traffic is filtered by the <code>my-filter</code> filter.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> configuration with a single ingress and filter.
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-cluster</span></span>
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">targetKafkaServiceRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">my-cluster</span></span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+  <span class="key">filterRefs</span>:
+    - <span class="string"><span class="content">name: my-filter</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>proxyRef</code> identifies the <code>KafkaProxy</code> resource that this virtual cluster is part of.</p>
+        </li>
+        <li>
+         <p><code>targetKafkaServiceRef</code> specifies the <code>KafkaService</code> that defines the Kafka cluster proxied by the virtual cluster.</p>
+        </li>
+        <li>
+         <p><code>ingressRef</code> defines the ingresses that expose the virtual cluster. Each ingress references a <code>KafkaProxyIngress</code> by name.</p>
+        </li>
+        <li>
+         <p><code>filterRefs</code> specifies the list of filters applied to Kafka protocol traffic.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The following example shows configuration for a <code>VirtualKafkaCluster</code> that is exposed to Kafka clients running both on and off the cluster, using TLS. Because TLS is used, the ingress configuration must reference a TLS server certificate. This example has two filters.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> configuration with two TLS-enabled ingresses
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-cluster</span></span>
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">targetKafkaServiceRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">my-cluster</span></span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+      <span class="key">tls</span>:
+        <span class="key">certificateRef</span>:
+          <span class="key">name</span>: <span class="string"><span class="content">'cluster-ip-server-cert'</span></span>
+          <span class="key">kind</span>: <span class="string"><span class="content">Secret</span></span>
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: load-balancer</span></span>
+      <span class="key">tls</span>:
+          <span class="key">certificateRef</span>:
+            <span class="key">name</span>: <span class="string"><span class="content">'external-server-cert'</span></span>
+            <span class="key">kind</span>: <span class="string"><span class="content">Secret</span></span>
+  <span class="key">filterRefs</span>:
+    - <span class="string"><span class="content">name: my-filter-1</span></span>
+    - <span class="string"><span class="content">name: my-filter-2</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>name</code> in the ingress named <code>cluster-ip</code> references a <code>Secret</code> containing the server certificate for the <code>clusterIP</code> ingress.</p>
+        </li>
+        <li>
+         <p><code>name</code> in the ingress named <code>load-balancer</code> references a <code>Secret</code> containing the server certificate for the <code>loadBalancer</code> ingress.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="sect4">
+       <h5 id="con-virtualkafkacluster-clusterip-generate-tls-certificates-operator">Generating TLS certificates for <code>clusterIP</code> ingress type</h5>
+       <div class="paragraph _abstract">
+        <p>When using the <code>clusterIP</code> ingress type with the <code>TLS</code> protocol, you must provide suitable TLS certificates to secure communication.</p>
+       </div>
+       <div class="paragraph">
+        <p>The basic steps are as follows:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>Generate a TLS server certificate that covers the service names assigned to the virtual cluster by the ingress.</p>
+         </li>
+         <li>
+          <p>Provide the certificate to the virtual cluster using a Kubernetes <code>Secret</code> of type <code>kubernetes.io/tls</code>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>The exact procedure for generating the certificate depends on the tooling and processes used by your organization.</p>
+       </div>
+       <div class="paragraph">
+        <p>The certificate must meet the following criteria:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>The certificate needs to be signed by a CA that is trusted by the <strong>on-cluster applications</strong> that connect to the virtual cluster.</p>
+         </li>
+         <li>
+          <p>The format of the key must be PKCS#8 encoded PEM (Privacy Enhanced Mail). It must not be password protected.</p>
+         </li>
+         <li>
+          <p>The certificate must use SANs (Subject Alternate Names) to list all service names or use a wildcard TLS certificate that covers them all. Assuming a virtual cluster name of <code>my-cluster</code>, an ingress name of <code>cluster-ip</code>, and a Kafka cluster using node IDs (0-2), the following SANs must be listed in the certificate:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="text">my-cluster-cluster-ip-bootstrap.&lt;namespace&gt;.svc.cluster.local
+my-cluster-cluster-ip-0.&lt;namespace&gt;.svc.cluster.local
+my-cluster-cluster-ip-1.&lt;namespace&gt;.svc.cluster.local
+my-cluster-cluster-ip-2.&lt;namespace&gt;.svc.cluster.local</code></pre>
+           </div>
+          </div>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>Create a secret for the certificate using the following command:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shel">kubectl create secret tls &lt;secret-name&gt; --namespace &lt;namespace&gt; --cert=&lt;path/to/cert/file&gt; --key=&lt;path/to/key/file&gt;</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p><code>&lt;secret-name&gt;</code> is the name of the secret to be created, <code>&lt;namespace&gt;</code> is the name of the namespace where the proxy is to be deployed, and <code>&lt;path/to/cert/file&gt;</code> and <code>&lt;path/to/key/file&gt;</code> are the paths to the certificate and key files.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="con-virtualkafkacluster-loadbalancer-generate-tls-certificates-operator">Generating TLS certificates for <code>loadBalancer</code> ingress type</h5>
+       <div class="paragraph _abstract">
+        <p>When using <code>loadBalancer</code> ingress type, you must provide suitable TLS certificates to secure communication.</p>
+       </div>
+       <div class="paragraph">
+        <p>The basic steps are as follows:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>Generate a TLS server certificate that covers the bootstrap and broker names assigned to the virtual cluster by the ingress.</p>
+         </li>
+         <li>
+          <p>Provide the certificate to the virtual cluster using a Kubernetes <code>Secret</code> of type <code>kubernetes.io/tls</code>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>The exact procedure for generating the certificate depends on the tooling and processes used by your organization.</p>
+       </div>
+       <div class="paragraph">
+        <p>The certificate must meet the following criteria:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>The certificate needs to be signed by a CA that is trusted by the <strong>off-cluster applications</strong> that connect to the virtual cluster.</p>
+         </li>
+         <li>
+          <p>The format of the key must be PKCS#8 encoded PEM (Privacy Enhanced Mail). It must not be password protected.</p>
+         </li>
+         <li>
+          <p>The certificate must use SANs (Subject Alternate Names) to list the bootstrap and all the broker names or use a wildcard TLS certificate that covers them all. Assuming a <code>bootstrapAddress</code> of <code>$(virtualClusterName).kafkaproxy.example.com</code>, an <code>advertisedBrokerAddressPattern</code> of <code>broker-$(nodeId).$(virtualClusterName).kafkaproxy.example.com</code>, a Kafka cluster using node IDs (0-2), and a virtual cluster name of <code>my-cluster</code>, the following SANs must be listed in the certificate:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="text">mycluster.kafkaproxy.example.com
+broker-0.mycluster.kafkaproxy.example.com
+broker-1.mycluster.kafkaproxy.example.com
+broker-2.mycluster.kafkaproxy.example.com</code></pre>
+           </div>
+          </div>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>Create a secret for the certificate using the following command:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shel">kubectl create secret tls &lt;secret-name&gt; --namespace &lt;namespace&gt; --cert=&lt;path/to/cert/file&gt; --key=&lt;path/to/key/file&gt;</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p><code>&lt;secret-name&gt;</code> is the name of the secret to be created, <code>&lt;namespace&gt;</code> is the name of the namespace where the proxy is to be deployed, and <code>&lt;path/to/cert/file&gt;</code> and <code>&lt;path/to/key/file&gt;</code> are the paths to the certificate and key files.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-virtualkafkacluster-loadbalancer-dns-config-operator">Configuring DNS for load balancer ingress</h5>
+       <div class="paragraph _abstract">
+        <p>When using the <code>loadBalancer</code> ingress type, you must ensure that both the <code>bootstrapAddress</code> and the names generated from <code>advertisedBrokerAddressPattern</code> resolve to the <strong>external address</strong> of the Kubernetes <code>Service</code> underlying the load balancer on the <strong>network where the off-cluster applications run</strong>.</p>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>The Kroxylicious Operator is installed.</p>
+         </li>
+         <li>
+          <p><code>KafkaProxy</code>, <code>VirtualKafkaCluster</code>, and <code>KafkaProxyIngress</code> resources are deployed.</p>
+         </li>
+         <li>
+          <p>The <code>VirtualKafkaCluster</code> and <code>KafkaProxyIngress</code> resources are configured to use a <code>loadBalancer</code> ingress.</p>
+         </li>
+         <li>
+          <p>DNS can be configured on the network where the off-cluster applications run.</p>
+         </li>
+         <li>
+          <p>Network traffic can to flow from the application network run to the external addresses provided by the Kubernetes cluster.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>If using Minikube as your Kubernetes environment, enable the <a href="https://minikube.sigs.k8s.io//docs/commands/tunnel/">Minikube Load Balancer tunnel</a> by running the following command. Use a separate console window to do this as the command needs to stay running for the tunnel to work.</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">minikube tunnel</code></pre>
+           </div>
+          </div>
+         </li>
+         <li>
+          <p>Run the following command to discover the <strong>external address</strong> being used by the load balancer:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">kubectl get virtualkafkacluster -n &lt;namespace&gt; &lt;virtual-cluster-name&gt; -o=jsonpath='{.status.ingresses[?(@.name == "&lt;ingress-name&gt;")].loadBalancerIngressPoints}'</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>Replace <code>&lt;namespace&gt;</code> with the name of the Kubernetes namespace where the resources are deployed, replace <code>&lt;ingress-name&gt;</code> with the name of the KafkaProxyIngresses and replace <code>&lt;virtual-cluster-name&gt;</code> with the name of the <code>VirtualKafkaCluster</code> resource.</p>
+          </div>
+          <div class="paragraph">
+           <p>Depending on your Kubernetes environment, the command returns an object containing an IP address or a hostname. This is the external address of the load balancer.</p>
+          </div>
+         </li>
+         <li>
+          <p>Configure your DNS so that the bootstrap and broker names resolve to the external address.</p>
+          <div class="paragraph">
+           <p>Assuming a <code>bootstrapAddress</code> of <code>$(virtualClusterName).kafkaproxy.example.com</code>, an <code>advertisedBrokerAddressPattern</code> of <code>broker-$(nodeId).$(virtualClusterName).kafkaproxy.example.com</code>, a Kafka cluster uses node IDs (0-2), and a virtual cluster name of <code>my-cluster</code>, the following DNS mappings are listed:</p>
+          </div>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="text">my-cluster.kafkaproxy.example.com =&gt; &lt;external address&gt;
+broker-0.my-cluster.kafkaproxy.example.com =&gt; &lt;external address&gt;
+broker-1.my-cluster.kafkaproxy.example.com =&gt; &lt;external address&gt;
+broker-2.my-cluster.kafkaproxy.example.com =&gt; &lt;external address&gt;</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>The exact steps vary by environment and network setup.</p>
+          </div>
+         </li>
+         <li>
+          <p>Confirm that the names resolve from the application network:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">nslookup mycluster.kafkaproxy.example.com
+nslookup broker-0.mycluster.kafkaproxy.example.com</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="con-virtualkafkacluster-openshiftroute-generate-tls-certificates-operator">Generating TLS certificates for <code>openshiftRoute</code> ingress type</h5>
+       <div class="paragraph _abstract">
+        <p>When using the <code>openshiftRoute</code> ingress type, you must provide suitable TLS certificates to secure communication.</p>
+       </div>
+       <div class="paragraph">
+        <p>The basic steps are as follows:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>Generate a TLS server certificate that covers the bootstrap and broker names assigned to the virtual cluster by the ingress.</p>
+         </li>
+         <li>
+          <p>Provide the certificate to the virtual cluster using a Kubernetes <code>Secret</code> of type <code>kubernetes.io/tls</code>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>The exact procedure for generating the certificate depends on the tooling and processes used by your organization.</p>
+       </div>
+       <div class="paragraph">
+        <p>The certificate must meet the following criteria:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>The certificate needs to be signed by a CA that is trusted by the <strong>off-cluster applications</strong> that connect to the virtual cluster.</p>
+         </li>
+         <li>
+          <p>The format of the key must be PKCS#8 encoded PEM (Privacy Enhanced Mail). It must not be password protected.</p>
+         </li>
+         <li>
+          <p>The certificate must use SANs (Subject Alternate Names) to list the bootstrap and all the broker names or use a wildcard TLS certificate that covers them all. Assuming a <code>bootstrapAddress</code> of <code>$(virtualClusterName)-bootstrap.ingress-domain:443</code>, an <code>advertisedBrokerAddressPattern</code> of <code>$(virtualClusterName)-$(nodeId).ingress-domain:443</code>, a Kafka cluster using node IDs (0-2), and a virtual cluster name of <code>my-cluster</code>, the following SANs must be listed in the certificate:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="text">mycluster-bootstrap.ingress-domain
+mycluster-0.ingress-domain
+mycluster-1.ingress-domain
+mycluster-2.ingress-domain</code></pre>
+           </div>
+          </div>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>To prepare your certificate in advance, look up the ingress domain in the Ingress Controller:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="bash">oc get ingresscontrollers.operator.openshift.io -n openshift-ingress-operator default -o=jsonpath='{.status.domain}'</code></pre>
+        </div>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">The bootstrap and broker addresses may contain different ingress domains if <a href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/ingress_and_load_balancing/routes#nw-ingress-sharding-route-configuration_creating-basic-routes" target="_blank" rel="noopener">Ingress Controller sharding</a> is used.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="paragraph">
+        <p>Create a secret for the certificate using the following command:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shel">kubectl create secret tls &lt;secret-name&gt; --namespace &lt;namespace&gt; --cert=&lt;path/to/cert/file&gt; --key=&lt;path/to/key/file&gt;</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p><code>&lt;secret-name&gt;</code> is the name of the secret to be created, <code>&lt;namespace&gt;</code> is the name of the namespace where the proxy is to be deployed, and <code>&lt;path/to/cert/file&gt;</code> and <code>&lt;path/to/key/file&gt;</code> are the paths to the certificate and key files.</p>
+       </div>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-operator-configuring-kafkaprotocolfilters-operator">4.3. Filters</h3>
+     <div class="paragraph _abstract">
+      <p>A <code>KafkaProtocolFilter</code> resource represents a Kroxylicious Proxy filter. It is not uniquely associated with a <code>VirtualKafkaCluster</code> or <code>KafkaProxy</code> instance; it can be used in a number of <code>VirtualKafkaCluster</code> instances in the same namespace.</p>
+     </div>
+     <div class="paragraph">
+      <p>A <code>KafkaProtocolFilter</code> is similar to one of the items in a proxy configuration’s <code>filterDefinitions</code>:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>The resource’s <code>metadata.name</code> corresponds directly to the <code>name</code> of a <code>filterDefinitions</code> item.</p>
+       </li>
+       <li>
+        <p>The resource’s <code>spec.type</code> corresponds directly to the <code>type</code> of a <code>filterDefinitions</code> item.</p>
+       </li>
+       <li>
+        <p>The resource’s <code>spec.configTemplate</code> corresponds to the <code>config</code> of a <code>filterDefinitions</code> item, but is subject to interpolation by the operator.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-operate-proxy-operator">5. Operating a proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Monitor the operational status of the proxy and configure resource usage. This section explains how to check the status of the <code>KafkaProxyIngress</code> and <code>VirtualKafkaCluster</code> resources, and how to set CPU and memory requests and limits for the proxy container.</p>
+    </div>
+    <div class="paragraph">
+     <p>This section assumes you have a running Kroxylicious Proxy instance.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="con-checking-virtualkafkacluster-status-operator">5.1. Checking the status of the <code>VirtualKafkaCluster</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>The status of a <code>VirtualKafkaCluster</code> resource provides feedback on its configuration through a set of conditions. These include the <code>ResolvedRefs</code> condition, which indicates whether all referenced resources exist, and the <code>Accepted</code> condition, which indicates whether the cluster’s configuration was successfully applied to the proxy.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="resolvedrefs_conditions">5.1.1. <code>ResolvedRefs</code> conditions</h4>
+      <div class="paragraph">
+       <p>When you create a <code>VirtualKafkaCluster</code>, the operator checks whether the following exist:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>A <code>KafkaProxy</code> matching <code>spec.proxyRef</code>.</p>
+        </li>
+        <li>
+         <p>Each <code>KafkaProxyIngress</code> specified in <code>spec.ingresses</code>, and whether they refer to the same <code>KafkaProxy</code> as the virtual cluster.</p>
+        </li>
+        <li>
+         <p>A <code>Secret</code> referred to in the <code>tls</code> property.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The result is reported in <code>status.conditions</code> with a <code>ResolvedRefs</code> condition accordingly.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> status when all referenced resources exist
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+  <span class="key">generation</span>: <span class="string"><span class="content">12</span></span>
+<span class="key">spec</span>:
+  <span class="comment"># ...</span>
+<span class="key">status</span>:
+  <span class="key">observedGeneration</span>: <span class="string"><span class="content">12</span></span>
+  <span class="key">conditions</span>:
+    - <span class="string"><span class="content">type: ResolvedRefs</span></span>
+      <span class="key">status</span>: <span class="string"><span class="content">True</span></span>
+      <span class="key">observedGeneration</span>: <span class="string"><span class="content">12</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>The <code>status.observedGeneration</code> in the status matches the <code>metadata.generation</code>, indicating that the status is up-to-date for the latest <code>spec</code>.</p>
+        </li>
+        <li>
+         <p>The <code>conditions</code> array reports any issues with the resource.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>ResolvedRefs</code> is the condition type used to report any issues with referenced resources.</p>
+           </li>
+           <li>
+            <p><code>status</code> value of the condition. If <code>True</code>, all references resources resolve correctly. <code>False</code> indicates there are issues.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>A status value of <code>False</code> means that one or more of the referenced resources is missing. In this case, the condition includes <code>reason</code> and <code>message</code> properties with more details.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="accepted_conditions">5.1.2. <code>Accepted</code> conditions</h4>
+      <div class="paragraph">
+       <p>When a <code>VirtualKafkaCluster</code> has a valid spec, the operator attempts to configure the proxy instance accordingly. This might not be possible. For example, the <code>spec</code> may be valid but incompatible with other virtual clusters running in the same proxy instance.</p>
+      </div>
+      <div class="paragraph">
+       <p>The operator sets a condition type of <code>Accepted</code> in <code>status.conditions</code> to indicate whether or not a virtual cluster has been successfully configured within a proxy instance.</p>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-checking-kafkaproxyingress-status-operator">5.2. Checking the status of the <code>KafkaProxyIngress</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>The status of a <code>KafkaProxyIngress</code> resource provides feedback on its configuration through a set of conditions. These include the <code>ResolvedRefs</code> condition, which indicates whether all referenced resources exist.</p>
+     </div>
+     <div class="paragraph">
+      <p>When you create a <code>KafkaProxyIngress</code>, the operator checks whether a <code>KafkaProxy</code> corresponding to the <code>spec.proxyRef</code> exists. The result is reported in <code>status.conditions</code> with a <code>ResolvedRefs</code> condition accordingly.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProxyIngress</code> status when <code>spec.proxyRef</code> exists
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">cluster-ip</span></span>
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">generation</span>: <span class="string"><span class="content">12</span></span>
+<span class="key">spec</span>:
+  <span class="comment"># ...</span>
+<span class="key">status</span>:
+  <span class="key">observedGeneration</span>: <span class="string"><span class="content">12</span></span>
+  <span class="key">conditions</span>:
+    - <span class="string"><span class="content">type: ResolvedRefs</span></span>
+      <span class="key">status</span>: <span class="string"><span class="content">True</span></span>
+      <span class="key">observedGeneration</span>: <span class="string"><span class="content">12</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>The <code>status.observedGeneration</code> in the status matches the <code>metadata.generation</code>, indicating that the status is up-to-date for the latest <code>spec</code>.</p>
+       </li>
+       <li>
+        <p>The <code>conditions</code> array reports any issues with the resource.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>ResolvedRefs</code> is the condition type used to report any issues with referenced resources.</p>
+          </li>
+          <li>
+           <p><code>status</code> value of the condition. If <code>True</code>, all references resources resolve correctly. <code>False</code> indicates there are issues.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A status value of <code>False</code> means that the <code>KafkaProxy</code> resource is missing. In this case, the condition includes <code>reason</code> and <code>message</code> properties with more details.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-kafkaproxy-cpu-memory-allocation-operator">5.3. Configuring Proxy container CPU and memory resource limits and requests</h3>
+     <div class="paragraph _abstract">
+      <p>When you define a <code>KafkaProxy</code> resource, a number of Kubernetes <code>Pods</code> are created, each with a proxy container. Each of these containers runs a single Kroxylicious Proxy process.</p>
+     </div>
+     <div class="paragraph">
+      <p>By default, these proxy containers are defined without resource limits. To manage CPU and memory consumption in your environment, modify the <code>proxyContainer</code> section within your <code>KafkaProxy</code> specification.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProxy</code> configuration with proxy container resource specification
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxy</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+<span class="key">spec</span>:
+  <span class="key">infrastructure</span>:
+    <span class="key">proxyContainer</span>:
+      <span class="key">resources</span>:
+        <span class="key">requests</span>:
+          <span class="key">cpu</span>: <span class="string"><span class="content">'400m'</span></span>
+          <span class="key">memory</span>: <span class="string"><span class="content">'656Mi'</span></span>
+        <span class="key">limits</span>:
+          <span class="key">cpu</span>: <span class="string"><span class="content">'500m'</span></span>
+          <span class="key">memory</span>: <span class="string"><span class="content">'756Mi'</span></span></code></pre>
+      </div>
+     </div>
+     <div class="ulist _additional-resources">
+      <div class="title">Additional resources</div>
+      <ul>
+       <li>
+        <p><a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/" target="_blank" rel="noopener">Kubernetes documentation: Resource Management for Pods and Containers</a></p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-kafkaproxyingress-infrastructure-annotations-operator">5.4. Configuring infrastructure annotations for ingress resources</h3>
+     <div class="paragraph _abstract">
+      <p>When the operator creates Kubernetes Services and Routes for a <code>KafkaProxyIngress</code>, you can specify custom annotations to be applied to those resources. This enables platform-specific behaviour such as load balancer configuration, certificate management, or timeout tuning.</p>
+     </div>
+     <div class="paragraph">
+      <p>Infrastructure annotations are configured in the <code>spec.infrastructure.annotations</code> field of the <code>KafkaProxyIngress</code> resource. The annotations are applied to all Services and Routes created for the ingress, regardless of the ingress type (<code>clusterIP</code>, <code>loadBalancer</code>, or <code>openShiftRoute</code>).</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProxyIngress</code> with infrastructure annotations for an AWS Network Load Balancer
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">load-balancer</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">infrastructure</span>:
+    <span class="key">annotations</span>:
+      <span class="key">service.beta.kubernetes.io/aws-load-balancer-type</span>: <span class="string"><span class="delimiter">"</span><span class="content">nlb</span><span class="delimiter">"</span></span>
+      <span class="key">service.beta.kubernetes.io/aws-load-balancer-scheme</span>: <span class="string"><span class="delimiter">"</span><span class="content">internet-facing</span><span class="delimiter">"</span></span>
+  <span class="key">loadBalancer</span>:
+    <span class="key">bootstrapAddress</span>: <span class="string"><span class="delimiter">"</span><span class="content">$(virtualClusterName).kafkaproxy.example.com</span><span class="delimiter">"</span></span>
+    <span class="key">advertisedBrokerAddressPattern</span>: <span class="string"><span class="delimiter">"</span><span class="content">broker-$(nodeId).$(virtualClusterName).kafkaproxy.example.com</span><span class="delimiter">"</span></span></code></pre>
+      </div>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProxyIngress</code> with infrastructure annotations for OpenShift Route timeouts
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">openshift-route</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">infrastructure</span>:
+    <span class="key">annotations</span>:
+      <span class="key">haproxy.router.openshift.io/timeout</span>: <span class="string"><span class="delimiter">"</span><span class="content">60s</span><span class="delimiter">"</span></span>
+  <span class="key">openShiftRoute</span>: <span class="string"><span class="content">{}</span></span></code></pre>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="annotation_key_restrictions">5.4.1. Annotation key restrictions</h4>
+      <div class="paragraph">
+       <p>Annotation keys must be between 1 and 253 characters in length, following the Kubernetes qualified name convention.</p>
+      </div>
+      <div class="paragraph">
+       <p>Annotations with the <code>kroxylicious.io/</code> prefix are reserved for operator use and are rejected by the API server. The operator manages its own annotations on the created resources (for example, <code>kroxylicious.io/bootstrap-servers</code>), and these take precedence over any infrastructure annotations with conflicting keys.</p>
+      </div>
+      <div class="ulist _additional-resources">
+       <div class="title">Additional resources</div>
+       <ul>
+        <li>
+         <p><a href="https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/" target="_blank" rel="noopener">Kubernetes documentation: Annotations</a></p>
+        </li>
+       </ul>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-secure-proxy-securing">6. Securing a proxy</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Secure proxies by using TLS and storing sensitive values in external resources.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="prerequisites_2">6.1. Prerequisites</h3>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>A running Kroxylicious Proxy instance</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-operator-secure-client-proxy-connection-securing">6.2. Securing the client-to-proxy connection</h3>
+     <div class="paragraph _abstract">
+      <p>Secure client-to-proxy communications using TLS.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="con-configuring-tls-between-client-and-proxy-securing">6.2.1. TLS configuration for client-to-proxy connections</h4>
+      <div class="paragraph _abstract">
+       <p>This example shows a <code>VirtualKafkaCluster</code>, exposing it to Kafka clients running on the same Kubernetes cluster. It uses TLS as the transport protocol so that communication between Kafka clients and the proxy is encrypted.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> configuration
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-cluster</span></span>
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">targetKafkaServiceRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">my-cluster</span></span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+      <span class="key">tls</span>:
+        <span class="key">certificateRef</span>:
+          <span class="key">name</span>: <span class="string"><span class="content">server-certificate</span></span>
+          <span class="key">kind</span>: <span class="string"><span class="content">Secret</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>proxyRef</code> identifies the <code>KafkaProxy</code> resource that this virtual cluster is part of. It must be in the same namespace as the <code>VirtualKafkaCluster</code>.</p>
+        </li>
+        <li>
+         <p><code>targetKafkaServiceRef</code> identifies the <code>KafkaService</code> that is proxied by this virtual cluster. It must be in the same namespace as the <code>VirtualKafkaCluster</code>.</p>
+        </li>
+        <li>
+         <p><code>ingresses</code> defines how traffic flows into the virtual cluster.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>ingressRef</code> references a <code>KafkaProxyIngress</code>. A virtual cluster can be exposed by one or more ingresses, each of which must exist in the same namespace as the <code>VirtualKafkaCluster</code>.</p>
+           </li>
+           <li>
+            <p>If the referenced ingress requires TLS, the <code>tls</code> property must provide a TLS server certificate to use.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaProxyIngress</code> configuration for TLS
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxyIngress</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">cluster-ip</span></span>
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+<span class="key">spec</span>:
+  <span class="key">proxyRef</span>:
+    <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+  <span class="key">clusterIP</span>:
+    <span class="key">protocol</span>: <span class="string"><span class="content">TLS</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>proxyRef</code> identifies the <code>KafkaProxy</code> that this ingress belongs. It must be in the same namespace as the <code>KafkaProxyIngress</code>.</p>
+        </li>
+        <li>
+         <p><code>clusterIP</code> exposes the proxy to Kafka clients inside the same Kubernetes cluster using a <code>ClusterIP</code> service.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>protocol</code> specifies the transport protocol used by the ingress. In this example, it is set to <code>TLS</code>.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-virtualkafkacluster-mtls-securing">6.2.2. Mutual TLS configuration for client-to-proxy connections</h4>
+      <div class="paragraph _abstract">
+       <p>You can configure a virtual cluster ingress to request or require Kafka clients to authenticate to the proxy using TLS. This configuration is known as mutual TLS (mTLS), because both the client and the proxy authenticate each other using TLS.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> configuration requiring clients to present a trusted certificate provided from a <code>ConfigMap</code>
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="comment"># ...</span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+      <span class="key">tls</span>:
+        <span class="key">certificateRef</span>:
+          <span class="comment"># ...</span>
+        <span class="key">trustAnchorRef</span>:
+          <span class="key">kind</span>: <span class="string"><span class="content">ConfigMap</span></span>
+          <span class="key">name</span>: <span class="string"><span class="content">trusted-cas</span></span>
+          <span class="key">key</span>: <span class="string"><span class="content">trusted-cas.pem</span></span>
+        <span class="key">tlsClientAuthentication</span>: <span class="string"><span class="content">REQUIRED</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>trustAnchorRef</code> references a <code>ConfigMap</code> resource containing the CA certificates to trust.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>kind</code> is optional and defaults to <code>ConfigMap</code> if omitted.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p><code>tlsClientAuthentication</code> specifies whether client authentication is required (<code>REQUIRED</code>), requested (<code>REQUESTED</code>), or disabled (<code>NONE</code>). If a <code>trustAnchorRef</code> is specified, the default is <code>REQUIRED</code>.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> configuration requiring clients to present a trusted certificate provided from a <code>Secret</code>
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="comment"># ...</span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+      <span class="key">tls</span>:
+        <span class="key">certificateRef</span>:
+          <span class="comment"># ...</span>
+        <span class="key">trustAnchorRef</span>:
+          <span class="key">kind</span>: <span class="string"><span class="content">Secret</span></span>
+          <span class="key">name</span>: <span class="string"><span class="content">trusted-cas</span></span>
+          <span class="key">key</span>: <span class="string"><span class="content">trusted-cas.pem</span></span>
+        <span class="key">tlsClientAuthentication</span>: <span class="string"><span class="content">REQUIRED</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>trustAnchorRef</code> references a <code>Secret</code> resource containing the CA certificates to trust.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>kind</code> must specify <code>Secret</code>.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-virtualkafkacluster-tls-protocol-securing">6.2.3. TLS version configuration for client-to-proxy connections</h4>
+      <div class="paragraph _abstract">
+       <p>Some older versions of TLS (and SSL before it) are now considered insecure. These versions remain enabled by default in order to maximize interoperability between TLS clients and servers that only support older versions.</p>
+      </div>
+      <div class="paragraph">
+       <p>If the Kafka cluster than you want to connect to supports newer TLS versions, you can disable the proxy’s support for older, insecure versions. For example, if the Kafka cluster supports TLSv1.1, TLSv1.2 and TLSv1.3 you might choose to enable only TLSv1.3 support. This would reduce the susceptibility to a TLS downgrade attack.</p>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">It is good practice to disable insecure protocol versions.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>You can restrict which TLS protocol versions the proxy supports for client-to-proxy connections by configuring the <code>protocols</code> property.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> with restricted TLS protocol versions
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="comment"># ...</span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+      <span class="key">tls</span>:
+        <span class="key">certificateRef</span>:
+          <span class="comment"># ...</span>
+        <span class="key">protocols</span>:
+          <span class="key">allowed</span>:
+            - <span class="string"><span class="content">TLSv1.3</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>protocols</code> configures the TLS protocol versions used by the proxy.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>allowed</code> lists the protocol versions explicitly allowed for TLS negotiation.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>Alternatively, use <code>denied</code> to specify protocol versions to exclude.</p>
+      </div>
+      <div class="paragraph">
+       <p>The names of the TLS protocol versions supported depend on the JVM in the proxy container image.</p>
+      </div>
+      <div class="ulist _additional-resources">
+       <div class="title">Additional resources</div>
+       <ul>
+        <li>
+         <p><a href="https://docs.oracle.com/en/java/javase/17/docs/specs/security/standard-names.html#sslcontext-algorithms" target="_blank" rel="noopener">Oracle documentation: SSLContext names</a></p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-virtualkafkacluster-tls-cipher-securing">6.2.4. TLS cipher suite configuration for client-to-proxy connections</h4>
+      <div class="paragraph _abstract">
+       <p>A cipher suite is a set of cryptographic algorithms that together provide the security guarantees offered by TLS. During TLS negotiation, a server and client agree on a common cipher suite that they both support.</p>
+      </div>
+      <div class="paragraph">
+       <p>Some older cipher suites are now considered insecure, but may be enabled on the Kafka cluster to allow older clients to connect.</p>
+      </div>
+      <div class="paragraph">
+       <p>The cipher suites enabled by default in the proxy depend on the JVM used in the proxy image and the TLS protocol version that is negotiated.</p>
+      </div>
+      <div class="paragraph">
+       <p>To prevent TLS downgrade attacks, you can disable cipher suites known to be insecure or no longer recommended. However, the proxy and the cluster must support at least one cipher suite in common.</p>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">It is good practice to disable insecure cipher suites.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>You can restrict which TLS cipher suites the proxy uses when negotiating client-to-proxy connections by configuring the <code>cipherSuites</code> property.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>VirtualKafkaCluster</code> configuration using cipherSuites to allow specific ciphers
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">VirtualKafkaCluster</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="comment"># ...</span>
+  <span class="key">ingresses</span>:
+    - <span class="string"><span class="content">ingressRef:</span><span class="content">
+        name: cluster-ip</span></span>
+      <span class="key">tls</span>:
+        <span class="key">certificateRef</span>:
+          <span class="comment"># ...</span>
+        <span class="key">cipherSuites</span>:
+          <span class="key">allowed</span>:
+           - <span class="string"><span class="content">TLS_AES_128_GCM_SHA256</span></span>
+           - <span class="string"><span class="content">TLS_AES_256_GCM_SHA384</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>cipherSuites</code> configures the cipher suites used by the proxy.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>allowed</code> lists the cipher suites which are permitted, in preference order.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>Alternatively, you can use <code>denied</code> to specify cipher suites to exclude. The names of the cipher suites supported depend on the JVM in the proxy container image.</p>
+      </div>
+      <div class="ulist _additional-resources">
+       <div class="title">Additional resources</div>
+       <ul>
+        <li>
+         <p><a href="https://docs.oracle.com/en/java/javase/21/docs/specs/security/standard-names.html#jsse-cipher-suite-names" target="_blank" rel="noopener">Oracle documentation: JSSE Cipher Suite Names</a></p>
+        </li>
+       </ul>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-operator-secure-proxy-broker-connection-securing">6.3. Securing the proxy-to-broker connection</h3>
+     <div class="paragraph _abstract">
+      <p>Secure proxy-to-broker communication using TLS.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="con-configuring-kafkaservice-trust-securing">6.3.1. TLS trust configuration for proxy-to-cluster connections</h4>
+      <div class="paragraph _abstract">
+       <p>By default, the proxy uses the platform’s default trust store when connecting to the proxied cluster over TLS. This works if the cluster’s TLS certificates are signed by a well-known public Certificate Authority (CA), but fails if they’re signed by a private CA instead.</p>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">It is good practice to configure trust explicitly, even when proxied cluster’s TLS certificates are signed by a public CA.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>This example configures a <code>KafkaService</code> to trust TLS certificates signed by any Certificate Authority (CA) listed in the <code>trusted-cas.pem</code> entry of the <code>ConfigMap</code> named <code>trusted-cas</code>.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaService</code> configuration for trusting certificates provided by a <code>ConfigMap</code>
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaService</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">bootstrapServers</span>: <span class="string"><span class="content">kafka.example.com:9092</span></span>
+  <span class="key">tls</span>:
+    <span class="key">trustAnchorRef</span>:
+      <span class="key">name</span>: <span class="string"><span class="content">trusted-cas</span></span>
+      <span class="key">kind</span>: <span class="string"><span class="content">ConfigMap</span></span>
+      <span class="key">key</span>: <span class="string"><span class="content">trusted-cas.pem</span></span>
+    <span class="comment"># ...</span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>trustAnchorRef</code> references a separate Kubernetes resource containing the CA certificates to trust.</p>
+        </li>
+        <li>
+         <p><code>name</code> is the name of the <code>ConfigMap</code> providing the CA certificates. The resource must exist in the same namespace as the <code>KafkaService</code></p>
+        </li>
+        <li>
+         <p><code>kind</code> is optional and defaults to <code>ConfigMap</code>.</p>
+        </li>
+        <li>
+         <p><code>key</code> identifies the entry in the resource. The value must be a PEM-encoded set of CA certificates.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaService</code> configuration for trusting certificates provided by a <code>Secret</code>
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaService</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">bootstrapServers</span>: <span class="string"><span class="content">kafka.example.com:9092</span></span>
+  <span class="key">tls</span>:
+    <span class="key">trustAnchorRef</span>:
+      <span class="key">kind</span>: <span class="string"><span class="content">Secret</span></span>
+      <span class="key">name</span>: <span class="string"><span class="content">trusted-cas</span></span>
+      <span class="key">key</span>: <span class="string"><span class="content">trusted-cas.pem</span></span>
+    <span class="comment"># ...</span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>name</code> is the name of the <code>Secret</code> providing the CA certificates. The resource must exist in the same namespace as the <code>KafkaService</code></p>
+        </li>
+        <li>
+         <p><code>kind</code> must be <code>Secret</code>.</p>
+        </li>
+        <li>
+         <p><code>key</code> identifies the entry in the resource. The value must be a PEM-encoded set of CA certificates.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-tls-auth-to-kafka-cluster-securing">6.3.2. TLS authentication to proxied Kafka clusters</h4>
+      <div class="paragraph _abstract">
+       <p>Some Kafka clusters require mutual TLS (mTLS) authentication. You can configure the proxy to present a TLS client certificate using the <code>KafkaService</code> resource.</p>
+      </div>
+      <div class="paragraph">
+       <p>The TLS client certificate you provide must have been issued by a Certificate Authority (CA) that’s trusted by the proxied cluster.</p>
+      </div>
+      <div class="paragraph">
+       <p>This example configures a <code>KafkaService</code> to use a TLS client certificate stored in a <code>Secret</code> named <code>tls-cert-for-kafka.example.com</code>.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaService</code> configuration with TLS client authentication.
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaService</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">bootstrapServers</span>: <span class="string"><span class="content">kafka.example.com:9092</span></span>
+  <span class="key">tls</span>:
+    <span class="key">trustAnchorRef</span>:
+      <span class="key">kind</span>: <span class="string"><span class="content">ConfigMap</span></span>
+      <span class="key">name</span>: <span class="string"><span class="content">trusted-cas</span></span>
+      <span class="key">key</span>: <span class="string"><span class="content">trusted-cas.pem</span></span>
+    <span class="key">certificateRef</span>:
+      <span class="key">kind</span>: <span class="string"><span class="content">Secret</span></span>
+      <span class="key">name</span>: <span class="string"><span class="content">tls-cert-for-kafka.example.com</span></span>
+    <span class="comment"># ...</span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>certificateRef</code> identifies the TLS client certificate to use.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>kind</code> is optional and defaults to <code>Secret</code>. The <code>Secret</code> should have <code>type: kubernetes.io/tls</code>.</p>
+           </li>
+           <li>
+            <p><code>name</code> is the name of the resource of the given <code>kind</code>. This resource must exist in the same namespace as the <code>KafkaService</code></p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-configuring-kafkaservice-protocol-securing">6.3.3. TLS version configuration for proxy-to-cluster connections</h4>
+      <div class="paragraph _abstract">
+       <p>Some older versions of TLS (and SSL before it) are now considered insecure. These versions remain enabled by default in order to maximize interoperability between TLS clients and servers that only support older versions.</p>
+      </div>
+      <div class="paragraph">
+       <p>If the Kafka cluster than you want to connect to supports newer TLS versions, you can disable the proxy’s support for older, insecure versions. For example, if the Kafka cluster supports TLSv1.1, TLSv1.2 and TLSv1.3 you might choose to enable only TLSv1.3 support. This would reduce the susceptibility to a TLS downgrade attack.</p>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">It is good practice to disable insecure protocol versions.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>This example configures a <code>KafkaService</code> to allow only TLS v1.3 when connecting to <code>kafka.example.com</code>.</p>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaService</code> with restricted TLS protocol versions.
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaService</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">bootstrapServers</span>: <span class="string"><span class="content">kafka.example.com:9092</span></span>
+  <span class="key">tls</span>:
+    <span class="comment"># ...</span>
+    <span class="key">protocols</span>:
+      <span class="key">allowed</span>:
+        - <span class="string"><span class="content">TLSv1.3</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>protocols</code> configures the TLS protocol versions.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>allowed</code> lists the permitted TLS versions.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The <code>protocols</code> property also supports <code>deny</code>, if you prefer to list the versions to exclude instead. The names of the TLS protocol versions supported depend on the JVM in the proxy container image.</p>
+      </div>
+      <div class="ulist _additional-resources">
+       <div class="title">Additional resources</div>
+       <ul>
+        <li>
+         <p><a href="https://docs.oracle.com/en/java/javase/17/docs/specs/security/standard-names.html#sslcontext-algorithms" target="_blank" rel="noopener">Oracle documentation: SSLContext names</a></p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="con-configuring-kafkaservice-cipher-securing">6.3.4. TLS cipher suite configuration for proxy-to-cluster connections</h4>
+      <div class="paragraph _abstract">
+       <p>A cipher suite is a set of cryptographic algorithms that together provide the security guarantees offered by TLS. During TLS negotiation, a server and client agree on a common cipher suite that they both support.</p>
+      </div>
+      <div class="paragraph">
+       <p>Some older cipher suites are now considered insecure, but may be enabled on the Kafka cluster to allow older clients to connect.</p>
+      </div>
+      <div class="paragraph">
+       <p>The cipher suites enabled by default in the proxy depend on the JVM used in the proxy image and the TLS protocol version that is negotiated.</p>
+      </div>
+      <div class="paragraph">
+       <p>To prevent TLS downgrade attacks, you can disable cipher suites known to be insecure or no longer recommended. However, the proxy and the cluster must support at least one cipher suite in common.</p>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">It is good practice to disable insecure cipher suites.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaService</code> configured so the proxy negotiates TLS connections using only the listed cipher suites
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaService</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">bootstrapServers</span>: <span class="string"><span class="content">kafka.example.com:9092</span></span>
+  <span class="key">tls</span>:
+    <span class="comment"># ...</span>
+    <span class="key">cipherSuites</span>:
+      <span class="key">allowed</span>:
+       - <span class="string"><span class="content">TLS_AES_128_GCM_SHA256</span></span>
+       - <span class="string"><span class="content">TLS_AES_256_GCM_SHA384</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>cipherSuites</code> configures the cipher suites.</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>allowed</code> lists the permitted cipher suites.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The <code>cipherSuites</code> property also supports <code>denied</code>, if you prefer to list the cipher suites to exclude instead. The names of the cipher suites supported depend on the JVM in the proxy container image.</p>
+      </div>
+      <div class="ulist _additional-resources">
+       <div class="title">Additional resources</div>
+       <ul>
+        <li>
+         <p><a href="https://docs.oracle.com/en/java/javase/21/docs/specs/security/standard-names.html#jsse-cipher-suite-names" target="_blank" rel="noopener">Oracle documentation: JSSE Cipher Suite Names</a></p>
+        </li>
+       </ul>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-operator-secure-filter-securing">6.4. Securing filters</h3>
+     <div class="paragraph _abstract">
+      <p>Secure filters by using the security features provided by each filter and storing sensitive values in external resources such as a Kubernetes <code>Secret</code>.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="con-kafkaprotocolfilter-secrets-securing">6.4.1. Security-sensitive values in filter resources</h4>
+      <div class="paragraph _abstract">
+       <p>Filter resources can be configured to handle security-sensitive values like passwords or keys by referencing Kubernetes <code>Secret</code> and <code>ConfigMap</code> resources.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="template_use_and_value_interpolation">Template use and value interpolation</h5>
+       <div class="paragraph">
+        <p>Interpolation is supported in <code>spec.configTemplate</code> for the automatic substitution of placeholder values at runtime. This allows security-sensitive values, such as passwords or keys, to be specified in Kubernetes <code>Secret</code> resources rather than directly in the <code>KafkaProtocolFilter</code> resource. Likewise, things like trusted CA certificates can be defined in <code>ConfigMap</code> resources.</p>
+       </div>
+       <div class="paragraph">
+        <p>The operator determines which <code>Secret</code> and <code>ConfigMap</code> resources are referenced by a <code>KafkaProtocolFilter</code> resource and declares them as <code>volumes</code> in the proxy <code>Pod</code>, mounted into the proxy container. This example shows how to configure the <code>RecordEncryptionFilter</code> using a Vault KMS deployed in the same Kubernetes cluster.</p>
+       </div>
+       <div class="listingblock">
+        <div class="title">
+         Example <code>KafkaProtocolFilter</code> configuration
+        </div>
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="comment"># ...</span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">RecordEncryption</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">kms</span>: <span class="string"><span class="content">VaultKmsService</span></span>
+    <span class="key">kmsConfig</span>:
+      <span class="key">vaultTransitEngineUrl</span>: <span class="string"><span class="content">http://vault.vault.svc.cluster.local:8200/v1/transit</span></span>
+      <span class="key">vaultToken</span>:
+        <span class="key">password</span>: <span class="string"><span class="content">${secret:vault:token}</span></span>
+    <span class="key">selector</span>: <span class="string"><span class="content">TemplateKekSelector</span></span>
+    <span class="key">selectorConfig</span>:
+      <span class="key">template</span>: <span class="string"><span class="delimiter">"</span><span class="content">$(topicName)</span><span class="delimiter">"</span></span></code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>type</code> is the filter class name of the Record Encryption filter. If the unqualified name is ambiguous, it must be qualified by the filter package name.</p>
+         </li>
+         <li>
+          <p>The <code>KafkaProtocolFilter</code> requires a <code>configTemplate</code>, which supports <em>interpolation references</em>.</p>
+         </li>
+         <li>
+          <p>The <code>password</code> uses an <em>interpolation reference</em>, enclosed by <code>${</code> and <code>}</code> instead of a literal value. The operator supplies the value at runtime from the specified <code>Secret</code>.</p>
+         </li>
+         <li>
+          <p>The selector <code>template</code> is interpreted by the proxy. It uses different delimiters, <code>$(</code> and <code>)</code>, than the <em>interpolation reference</em>.</p>
+         </li>
+        </ul>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="structure_of_interpolation_references">Structure of interpolation references</h5>
+       <div class="paragraph">
+        <p>Let’s look at the example interpolation reference <code>${secret:vault:token}</code> in more detail.</p>
+       </div>
+       <div class="paragraph">
+        <p>It starts with <code>${</code> and ends with <code>}</code>. Between these, it is broken into three parts, separated by colons (<code>:</code>):</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>secret</code> is a <em>provider</em>. Supported providers are <code>secret</code> and <code>configmap</code> (note the use of lower case).</p>
+         </li>
+         <li>
+          <p><code>vault</code> is a <em>path</em>. The interpretation of the path depends on the provider.</p>
+         </li>
+         <li>
+          <p><code>token</code> is a <em>key</em>. The interpretation of the key also depends on the provider.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>For both <code>secret</code> and <code>configmap</code> providers:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>The path is interpreted as the name of a <code>Secret</code> or <code>ConfigMap</code> resource in the same namespace as the <code>KafkaProtocolFilter</code> resource.</p>
+         </li>
+         <li>
+          <p>The key is interpreted as a key in the <code>data</code> property of the <code>Secret</code> or <code>ConfigMap</code> resource.</p>
+         </li>
+        </ul>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-advanced-proxy-tuning-operator">7. Advanced proxy tuning</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Configure advanced network and connection settings for the proxy.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="con-kafkaproxy-network-settings-operator">7.1. Advanced network tuning for a proxy</h3>
+     <div class="paragraph _abstract">
+      <p>The <code>spec.network</code> section of a <code>KafkaProxy</code> resource provides low-level tuning options for the proxy listener and management HTTP server. The defaults are suitable for most deployments — only configure these settings if you have a specific operational reason to do so.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProxy</code> with network tuning applied
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxy</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+<span class="key">spec</span>:
+  <span class="key">network</span>:
+    <span class="key">proxy</span>:
+      <span class="key">workerThreadCount</span>: <span class="string"><span class="content">8</span></span>
+      <span class="key">shutdownQuietPeriod</span>: <span class="string"><span class="content">5s</span></span>
+      <span class="key">shutdownTimeout</span>: <span class="string"><span class="content">20s</span></span>
+    <span class="key">management</span>:
+      <span class="key">workerThreadCount</span>: <span class="string"><span class="content">2</span></span>
+      <span class="key">shutdownQuietPeriod</span>: <span class="string"><span class="content">5s</span></span>
+      <span class="key">shutdownTimeout</span>: <span class="string"><span class="content">20s</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>spec.network.proxy</code> configures network tuning for the proxy listener that handles Kafka client connections. All fields are optional.</p>
+       </li>
+       <li>
+        <p><code>workerThreadCount</code> is the number of threads available to process requests across client connections. Each connection is pinned to one thread, but a single thread can serve many connections. More threads increase parallelism but also CPU consumption. Tune this in conjunction with the pod’s CPU limits and validate under realistic load. Defaults to twice the number of available processors.</p>
+       </li>
+       <li>
+        <p><code>shutdownQuietPeriod</code> is the grace period during which the proxy continues to accept and complete in-flight requests before shutting down. If no new requests arrive during this window, shutdown proceeds. Defaults to <code>2s</code> if not specified.</p>
+       </li>
+       <li>
+        <p><code>shutdownTimeout</code> is the maximum time allowed for the proxy to complete shutdown, including the quiet period. If shutdown does not complete within this period, it is forced. Defaults to <code>15s</code> if not specified. Set this to a value less than the pod’s <code>terminationGracePeriodSeconds</code> (Kubernetes default: <code>30s</code>) to ensure the proxy can finish gracefully before Kubernetes forcibly terminates the pod.</p>
+       </li>
+       <li>
+        <p><code>spec.network.management</code> configures network tuning for the management HTTP server that serves metrics and health endpoints. Supports the same settings as the proxy listener, and can be configured independently.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Duration values use a string-based Go-style duration format (for example, <code>30s</code>, <code>5m</code>). Supported units are: <code>m</code> (minutes), <code>s</code> (seconds), <code>ms</code> (milliseconds), <code>μs</code> or <code>us</code> (microseconds), and <code>ns</code> (nanoseconds). Units can be combined, for example <code>1m30s</code>.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-kafkaproxy-idle-timeouts-operator">7.2. Configuring idle connection timeouts</h3>
+     <div class="paragraph _abstract">
+      <p>The proxy can automatically disconnect idle client connections to reclaim resources. Idle timeout configuration is optional and disabled by default. Enable it only when required for your deployment. Idle timeouts are configured under <code>spec.network.proxy</code> in the <code>KafkaProxy</code> resource and apply only to the proxy listener — they are not available for the management HTTP server. When enabled, idle disconnects are observable via the <code>kroxylicious_client_to_proxy_disconnects_total</code> metric.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="when_to_enable_idle_timeouts">7.2.1. When to enable idle timeouts</h4>
+      <div class="paragraph">
+       <p>Consider enabling idle timeouts in the following scenarios:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><strong>Security posture</strong>: unauthenticated connections can be closed quickly to limit the window for abuse, while authenticated connections get a more generous timeout.</p>
+        </li>
+        <li>
+         <p><strong>Unclosed connections</strong>: clients that abandon connections without properly closing them, leaving resources allocated unnecessarily.</p>
+        </li>
+        <li>
+         <p><strong>Network infrastructure requirements</strong>: environments where firewalls or load balancers drop idle connections, configure the proxy to disconnect gracefully first.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="when_not_to_enable_idle_timeouts">7.2.2. When not to enable idle timeouts</h4>
+      <div class="paragraph">
+       <p>Avoid enabling idle timeouts in the following scenarios:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><strong>Legitimate idle connections</strong>: applications that maintain long-lived connections with extended idle periods, such as consumers with long poll timeouts or applications using connection pooling.</p>
+        </li>
+        <li>
+         <p><strong>Stable network infrastructure</strong>: environments with reliable network infrastructure and no issues with idle connection management.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="how_idle_timeouts_work">7.2.3. How idle timeouts work</h4>
+      <div class="paragraph">
+       <p>The proxy supports two independent timeout settings that apply at different stages of the connection lifecycle:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><strong>Unauthenticated timeout</strong> (<code>unauthenticatedIdleTimeout</code>): applies to connections where the proxy has not yet detected completed authentication. The proxy considers authentication complete if either of the following is true:</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>A transport subject builder (a component that extracts an authenticated identity from transport-layer attributes) creates a subject with an identity (for example, from a client TLS certificate).</p>
+           </li>
+           <li>
+            <p>A SASL inspection or termination filter invokes <code>io.kroxylicious.proxy.filter.FilterContext.clientSaslAuthenticationSuccess</code>.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p><strong>Authenticated timeout</strong> (<code>authenticatedIdleTimeout</code>): applies to connections where an identity has been established, for the remainder of the connection’s lifetime.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="admonitionblock note">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+          <td class="content">
+           <div class="paragraph">
+            <p>For the proxy to detect authentication completion, you must configure either TLS client certificate authentication or a SASL inspection or termination filter. Without one of these, all connections remain in the unauthenticated state for their entire lifetime, and <code>authenticatedIdleTimeout</code> has no effect. For more information, see the <a href="../authentication-guide/">Client Authentication guide</a>.</p>
+           </div>
+          </td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>Both timeout settings are optional and have no default values. You can configure one, both, or neither depending on your requirements. Timeout values use a string-based duration format, following Go conventions (for example, <code>30s</code>, <code>5m</code>). Supported units are: <code>h</code> (hours), <code>m</code> (minutes), <code>s</code> (seconds), <code>ms</code> (milliseconds), <code>μs</code> or <code>us</code> (microseconds), and <code>ns</code> (nanoseconds). Units can be combined, for example <code>1m30s</code>.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="configuration_examples">7.2.4. Configuration examples</h4>
+      <div class="listingblock">
+       <div class="title">
+        Example <code>KafkaProxy</code> configuration with unauthenticated and authenticated idle timeouts
+       </div>
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProxy</span></span>
+<span class="key">apiVersion</span>: <span class="string"><span class="content">kroxylicious.io/v1alpha1</span></span>
+<span class="key">metadata</span>:
+  <span class="key">namespace</span>: <span class="string"><span class="content">my-proxy</span></span>
+  <span class="key">name</span>: <span class="string"><span class="content">simple</span></span>
+<span class="key">spec</span>:
+  <span class="key">network</span>:
+    <span class="key">proxy</span>:
+      <span class="key">unauthenticatedIdleTimeout</span>: <span class="string"><span class="content">30s</span></span>
+      <span class="key">authenticatedIdleTimeout</span>: <span class="string"><span class="content">10m</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>unauthenticatedIdleTimeout</code> Disconnect unauthenticated connections after 30 seconds of inactivity. If omitted, or zero, no idle timeout is applied.</p>
+        </li>
+        <li>
+         <p><code>authenticatedIdleTimeout</code> Disconnect authenticated connections after 10 minutes of inactivity. If omitted, or zero, no idle timeout is applied.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="monitoring_idle_disconnects">7.2.5. Monitoring idle disconnects</h4>
+      <div class="paragraph">
+       <p>The proxy tracks idle disconnects using the <code>kroxylicious_client_to_proxy_disconnects_total</code> metric with <code>cause="idle_timeout"</code>. This counter increments each time a connection is closed after exceeding the configured idle timeout.</p>
+      </div>
+      <div class="paragraph">
+       <p>The <code>kroxylicious_client_to_proxy_disconnects_total</code> metric also tracks other disconnect scenarios:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>cause="idle_timeout"</code> - Connection exceeded the configured idle timeout duration</p>
+        </li>
+        <li>
+         <p><code>cause="client_closed"</code> - The downstream client initiated the connection close</p>
+        </li>
+        <li>
+         <p><code>cause="server_closed"</code> - The upstream node closed the connection, causing the proxy to close the client connection</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>For more information about connection metrics, see <a href="#con-prometheus-metrics-proxy-operator">Overview of proxy metrics</a>.</p>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operator-monitoring-operator">8. Monitoring</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Kroxylicious supports key observability features to help you understand the performance and health of your proxy instances.</p>
+    </div>
+    <div class="paragraph">
+     <p>The Kroxylicious Proxy and Kroxylicious Operator generate metrics for real-time monitoring and alerting, as well as logs that capture their actions and behavior. You can integrate these metrics with a monitoring system like Prometheus for ingestion and analysis, while configuring log levels to control the granularity of logged information.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="con-prometheus-metrics-proxy-operator">8.1. Proxy metrics overview</h3>
+     <div class="paragraph _abstract">
+      <p>The proxy provides metrics for both connections and messages. These metrics are categorized into downstream (client-side) and upstream (broker-side) groups They allow users to assess the impact of the proxy and its filters on their Kafka system.</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Connection metrics count the connections made from the downstream (incoming connections from the clients) and the connection made by the proxy to upstream (outgoing connections to the Kafka brokers).</p>
+       </li>
+       <li>
+        <p>Message metrics count the number of <a href="https://kafka.apache.org/protocol.html#protocol_messages">Kafka protocol request and response messages</a> that flow through the proxy.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="sect3">
+      <h4 id="connection_metrics">8.1.1. Connection metrics</h4>
+      <div class="paragraph">
+       <p>Connection metrics count the TCP connections made from the client to the proxy (<code>kroxylicious_client_to_proxy_request_total</code>) and from the proxy to the broker (<code>kroxylicious_proxy_to_server_connections_total</code>). These metrics count connection <em>attempts</em>, so the connection count is incremented even if the connection attempt ultimately fails.</p>
+      </div>
+      <div class="paragraph">
+       <p>In addition to the count metrics, there are active connection gauge metrics that track the current number of open connections, and error metrics.</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>If an error occurs whilst the proxy is accepting a connection from the client the <code>kroxylicious_client_to_proxy_errors_total</code> metric is incremented by one.</p>
+        </li>
+        <li>
+         <p>If an error occurs whilst the proxy is attempting a connection to a broker the <code>kroxylicious_proxy_to_server_errors_total</code> metric is incremented by one.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>Connection and connection error metrics include the following labels: <code>virtual_cluster</code> (the virtual cluster’s name) and <code>node_id</code> (the broker’s node ID). When the client connects to the bootstrap endpoint of the virtual cluster, a node ID value of <code>bootstrap</code> is recorded.</p>
+      </div>
+      <div class="paragraph">
+       <p>The <code>kroxylicious_client_to_proxy_errors_total</code> metric also counts connection errors that occur before a virtual cluster has been identified. For these specific errors, the <code>virtual_cluster</code> and <code>node_id</code> labels are set to an empty string ("").</p>
+      </div>
+      <div class="admonitionblock note">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+          <td class="content">Error conditions signaled <em>within</em> the Kafka protocol response (such as <code>RESOURCE_NOT_FOUND</code> or <code>UNKNOWN_TOPIC_ID</code>) are not classed as errors by these metrics.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="sect4">
+       <h5 id="understanding_connection_metrics_relationships">Understanding connection metrics relationships</h5>
+       <div class="paragraph">
+        <p>The proxy provides several related metrics for tracking connections:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><strong>Connection counters</strong> (<code>kroxylicious_*_connections_total</code>) track the total number of connection attempts over time. These values only increase and provide a historical view of connection activity.</p>
+         </li>
+         <li>
+          <p><strong>Active connection gauges</strong> (<code>kroxylicious_*_active_connections</code>) show the current number of open connections at any given moment. These values increase when connections are established and decrease when connections are closed.</p>
+         </li>
+         <li>
+          <p><strong>Error counters</strong> (<code>kroxylicious_*_errors_total</code>) track connections that closed due to errors.</p>
+         </li>
+         <li>
+          <p><strong>Disconnect counters</strong> (<code>kroxylicious_client_to_proxy_disconnects_total</code>) track connections that closed without errors, categorized by cause.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>When a connection closes, it increments either the error counter or one of the disconnect counter causes, but never both. The active connection gauge decreases regardless of whether the closure was due to an error or a clean disconnect.</p>
+       </div>
+       <div class="paragraph">
+        <p>The following relationship holds:</p>
+       </div>
+       <div class="paragraph">
+        <p><code>Active connections = Connections total - (Errors total + sum of all Disconnect causes)</code></p>
+       </div>
+       <table class="tableblock frame-all grid-all stretch">
+        <caption class="title">Table 2. Connection metrics for client and broker interactions</caption>
+        <colgroup>
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+        </colgroup>
+        <thead>
+         <tr>
+          <th class="tableblock halign-left valign-top">Metric Name</th>
+          <th class="tableblock halign-left valign-top">Type</th>
+          <th class="tableblock halign-left valign-top">Labels</th>
+          <th class="tableblock halign-left valign-top">Description</th>
+         </tr>
+        </thead>
+        <tbody>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_client_to_proxy_connections_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one every time a connection is accepted from a client by the proxy.
+            <br>
+            This metric counts all connection attempts that reach the proxy, even those that end in error.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_client_to_proxy_errors_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one every time a connection is closed due to any downstream error.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_proxy_to_server_connections_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one every time a connection is made to the server from the proxy.
+            <br>
+            This metric counts all connections attempted to the broker, even those that end in error.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_proxy_to_server_errors_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one every time a connection is closed due to any upstream error.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_client_to_proxy_active_connections</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Gauge</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Shows the current number of active TCP connections from clients to the proxy.
+            <br>
+            This gauge reflects real-time connection state and decreases when connections are closed.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_proxy_to_server_active_connections</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Gauge</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Shows the current number of active TCP connections from the proxy to servers.
+            <br>
+            This gauge reflects real-time connection state and decreases when connections are closed.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_client_to_proxy_disconnects_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>cause</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one every time a client connection is closed by the proxy. The <code>cause</code> label indicates the reason for disconnection:
+            <br>
+            <code>idle_timeout</code> - Connection exceeded the configured idle timeout duration (requires idle timeouts configured via <code>network.proxy.unauthenticatedIdleTimeout</code> or <code>network.proxy.authenticatedIdleTimeout</code>).
+            <br>
+            <code>client_closed</code> - Client initiated the connection close.
+            <br>
+            <code>server_closed</code> - Backend server closed the connection, causing the proxy to close the client connection.
+            <br>
+            Note: Error-based disconnects are tracked separately via <code>kroxylicious_client_to_proxy_errors_total</code>, not this metric.</p>
+          </td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="message_metrics">8.1.2. Message metrics</h4>
+      <div class="paragraph">
+       <p>Message metrics count and record the sizes of the Kafka protocol requests and responses that flow through the proxy.</p>
+      </div>
+      <div class="paragraph">
+       <p>Use these metrics to help understand:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>the number of messages flowing through the proxy.</p>
+        </li>
+        <li>
+         <p>the overall volume of data through the proxy.</p>
+        </li>
+        <li>
+         <p>the effect the filters are having on the messages.</p>
+        </li>
+        <li>
+         <p>Downstream metrics</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>kroxylicious_client_to_proxy_request_total</code> counts requests as they arrive from the client.</p>
+           </li>
+           <li>
+            <p><code>kroxylicious_proxy_to_client_response_total</code> counts responses as they are returned to the client.</p>
+           </li>
+           <li>
+            <p><code>kroxylicious_client_to_proxy_request_size_bytes</code> is incremented by the size of each request as it arrives from the client.</p>
+           </li>
+           <li>
+            <p><code>kroxylicious_proxy_to_client_response_size_bytes</code> is incremented by the size of each response as it is returned to the client.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>Upstream metrics</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><code>kroxylicious_proxy_to_server_request_total</code> counts requests as they go to the broker.</p>
+           </li>
+           <li>
+            <p><code>kroxylicious_server_to_proxy_response_total</code> counts responses as they are returned by the broker.</p>
+           </li>
+           <li>
+            <p><code>kroxylicious_proxy_to_server_request_size_bytes</code> is incremented by the size of each request as it goes to the broker.</p>
+           </li>
+           <li>
+            <p><code>kroxylicious_server_to_proxy_response_size_bytes</code> is incremented by the size of each response as it is returned by the broker.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The size recorded is the encoded size of the protocol message. It includes the 4 byte <a href="https://kafka.apache.org/protocol.html#protocol_common">message size</a>.</p>
+      </div>
+      <div class="paragraph">
+       <p>Filters can alter the flow of messages through the proxy or the content of the message. This is apparent through the metrics.</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>If a filter sends a short-circuit, or closes a connection the downstream message counters will exceed the upstream counters.</p>
+        </li>
+        <li>
+         <p>If a filter changes the size of the message, the downstream size metrics will be different to the upstream size metrics.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="imageblock">
+       <div class="content">
+        <img src="../images/monitoring-message-counters.svg" alt="Conceptual diagram showing the downstream and upstream message metrics within the proxy, illustrating how they respond to message transit through it.">
+       </div>
+       <div class="title">Figure 3. Downstream and upstream message metrics in the proxy</div>
+      </div>
+      <div class="paragraph">
+       <p>Message metrics include the following labels: <code>virtual_cluster</code> (the virtual cluster’s name), <code>node_id</code> (the broker’s node ID), <code>api_key</code> (the message type), <code>api_version</code>, and <code>decoded</code> (a flag indicating if the message was decoded by the proxy).</p>
+      </div>
+      <div class="paragraph">
+       <p>When the client connects to the bootstrap endpoint of the virtual cluster, metrics are recorded with a node ID value of <code>bootstrap</code>.</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <caption class="title">Table 3. Kafka message metrics for proxy request and response flow</caption>
+       <colgroup>
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Metric Name</th>
+         <th class="tableblock halign-left valign-top">Type</th>
+         <th class="tableblock halign-left valign-top">Labels</th>
+         <th class="tableblock halign-left valign-top">Description</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_client_to_proxy_request_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by one every time a request arrives at the proxy from a client.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_proxy_to_server_request_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by one every time a request goes from the proxy to a server.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_server_to_proxy_response_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by one every time a response arrives at the proxy from a server.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_proxy_to_client_response_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by one every time a response goes from the proxy to a client.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_client_to_proxy_request_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Distribution</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by the size of the message each time a request arrives at the proxy from a client.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_proxy_to_server_request_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Distribution</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by the size of the message each time a request goes from the proxy to a server.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_server_to_proxy_response_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Distribution</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by the size of the message each time a response arrives at the proxy from a server.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_proxy_to_client_response_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Distribution</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>node_id</code>, <code>api_key</code>, <code>api_version</code>, <code>decoded</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by the size of the message each time a response goes from the proxy to a client.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="sect3">
+      <h4 id="reconfiguration_metrics">8.1.3. Reconfiguration metrics</h4>
+      <div class="paragraph">
+       <p>When the proxy applies a configuration change without a restart, it emits metrics that let operators confirm which virtual clusters were affected, whether updates succeeded, and how long the process took.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="reconfiguration_outcomes">Reconfiguration outcomes</h5>
+       <div class="paragraph">
+        <p>Every attempted reconfiguration increments <code>kroxylicious_reconfigure_total</code> with an <code>outcome</code> label:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>success</code> — all virtual clusters were successfully updated to the new configuration.</p>
+         </li>
+         <li>
+          <p><code>partial_failure</code> — the configuration update was partially applied. One or more virtual clusters failed to apply the new configuration and are no longer serving traffic. Use <code>kroxylicious_reconfigure_clusters_affected_total{outcome="failure"}</code> to identify which clusters were affected.</p>
+         </li>
+         <li>
+          <p><code>catastrophic</code> — applying the configuration failed in a manner that the proxy could not contain within a virtual cluster, such as unparseable configuration or a bug in the proxy itself. Query <code>kroxylicious_virtual_cluster_state == 1</code> to assess the current state of your virtual clusters. Inspect the proxy logs to understand what went wrong and raise an issue if appropriate.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">Reconfigurations rejected before any change is attempted — for example, because a concurrent reconfiguration is already in progress, or because the new configuration changes a setting that requires a restart — are not counted in <code>kroxylicious_reconfigure_total</code>.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="paragraph">
+        <p>A virtual cluster that is removed or modified during a reconfiguration drains its existing connections before stopping. The time spent draining is recorded by <code>kroxylicious_virtual_cluster_state_duration_seconds</code> with <code>state="draining"</code> (see <a href="#virtual_cluster_lifecycle_metrics">Virtual cluster lifecycle metrics</a>). A high drain duration typically reflects in-flight requests waiting for broker acknowledgement; inspect broker health if drains are consistently slow before considering tuning the drain timeout. When the timeout expires, remaining connections are force-closed and recorded in <code>kroxylicious_client_to_proxy_disconnects_total</code> with <code>cause="drain_timeout"</code>.</p>
+       </div>
+       <table class="tableblock frame-all grid-all stretch">
+        <caption class="title">Table 4. Reconfiguration metrics</caption>
+        <colgroup>
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+        </colgroup>
+        <thead>
+         <tr>
+          <th class="tableblock halign-left valign-top">Metric Name</th>
+          <th class="tableblock halign-left valign-top">Type</th>
+          <th class="tableblock halign-left valign-top">Labels</th>
+          <th class="tableblock halign-left valign-top">Description</th>
+         </tr>
+        </thead>
+        <tbody>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_reconfigure_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>outcome</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one for every reconfiguration attempted, labelled by <code>outcome</code> (<code>success</code>, <code>partial_failure</code>, or <code>catastrophic</code>).</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_reconfigure_duration_seconds</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Timer</p>
+          </td>
+          <td class="tableblock halign-left valign-top"></td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Records the end-to-end duration of each reconfiguration, including any connection draining.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_reconfigure_clusters_affected_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>operation</code>, <code>outcome</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one for each per-virtual-cluster operation during a reconfiguration. The <code>operation</code> label is <code>add</code>, <code>remove</code>, or <code>modify</code>; the <code>outcome</code> label is <code>success</code> or <code>failure</code>.</p>
+          </td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="virtual_cluster_lifecycle_metrics">8.1.4. Virtual cluster lifecycle metrics</h4>
+      <div class="paragraph">
+       <p>Each virtual cluster moves through a defined set of states. These metrics expose the current state of each cluster, how long it spends in each state, and what transitions have occurred.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="lifecycle_states">Lifecycle states</h5>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>initializing</code> — the cluster is starting up and not yet accepting traffic. A cluster that remains here longer than expected is unexpected; inspect the proxy logs.</p>
+         </li>
+         <li>
+          <p><code>serving</code> — the cluster is accepting connections and proxying traffic to and from the broker. This is the expected steady state.</p>
+         </li>
+         <li>
+          <p><code>draining</code> — the cluster is no longer accepting new connections; existing in-flight requests are completing before connections are closed. A cluster enters this state when its configuration is changed or when it is removed from the proxy. Connections that do not close before the drain timeout expires are force-closed.</p>
+         </li>
+         <li>
+          <p><code>failed</code> — the cluster encountered a runtime error it could not recover from, such as being unable to bind to its configured port, and is no longer serving traffic. Inspect the proxy logs to diagnose the cause.</p>
+         </li>
+         <li>
+          <p><code>stopped</code> — terminal state; the cluster has been permanently removed.</p>
+         </li>
+        </ul>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="using_the_lifecycle_metrics">Using the lifecycle metrics</h5>
+       <div class="paragraph">
+        <p><code>kroxylicious_virtual_cluster_state</code> is a <a href="https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md#stateset">StateSet</a> gauge: for each virtual cluster, the series for the current state reads <code>1</code> and all others read <code>0</code>. Query <code>kroxylicious_virtual_cluster_state == 1</code> to see the current state of every virtual cluster.</p>
+       </div>
+       <div class="paragraph">
+        <p>Use this gauge to alert on states that require attention:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>kroxylicious_virtual_cluster_state{state="failed"} == 1</code> — a cluster that is no longer serving traffic due to an error; inspect the proxy logs to diagnose.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p><code>kroxylicious_virtual_cluster_state_duration_seconds</code> records how long a cluster spent in each state, captured when it leaves that state. Use it to understand how long initialisation or drain operations typically take, and to identify when they consistently run close to their configured timeouts.</p>
+       </div>
+       <div class="paragraph">
+        <p><code>kroxylicious_virtual_cluster_transitions_total</code> counts each state change, labelled with the <code>from</code> and <code>to</code> states. Use it to detect abnormal lifecycle paths — for example, a cluster transitioning from <code>initializing</code> directly to <code>failed</code>.</p>
+       </div>
+       <table class="tableblock frame-all grid-all stretch">
+        <caption class="title">Table 5. Virtual cluster lifecycle metrics</caption>
+        <colgroup>
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+         <col style="width: 25%;">
+        </colgroup>
+        <thead>
+         <tr>
+          <th class="tableblock halign-left valign-top">Metric Name</th>
+          <th class="tableblock halign-left valign-top">Type</th>
+          <th class="tableblock halign-left valign-top">Labels</th>
+          <th class="tableblock halign-left valign-top">Description</th>
+         </tr>
+        </thead>
+        <tbody>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_virtual_cluster_state</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Gauge</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>state</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Reports the current lifecycle state of each virtual cluster. The series for the current state reads <code>1</code>; all other states read <code>0</code>.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_virtual_cluster_state_duration_seconds</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Timer</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>state</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Records how long a virtual cluster spent in a given state, captured when it transitions out of that state.</p>
+          </td>
+         </tr>
+         <tr>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>kroxylicious_virtual_cluster_transitions_total</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Counter</p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock"><code>virtual_cluster</code>, <code>from</code>, <code>to</code></p>
+          </td>
+          <td class="tableblock halign-left valign-top">
+           <p class="tableblock">Incremented by one for every lifecycle state transition, labelled with the <code>from</code> and <code>to</code> states.</p>
+          </td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="authentication_metrics">8.1.5. Authentication metrics</h4>
+      <div class="paragraph">
+       <p>When a filter announces a client authentication outcome, the proxy records it so that operators can monitor authentication activity across all virtual clusters and mechanisms.</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <caption class="title">Table 6. Authentication metrics</caption>
+       <colgroup>
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Metric Name</th>
+         <th class="tableblock halign-left valign-top">Type</th>
+         <th class="tableblock halign-left valign-top">Labels</th>
+         <th class="tableblock halign-left valign-top">Description</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_client_auth_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>virtual_cluster</code>, <code>mechanism</code>, <code>outcome</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Incremented by one every time a filter announces a client authentication outcome. The <code>mechanism</code> label identifies the SASL mechanism used (for example <code>SCRAM-SHA-256</code>, <code>OAUTHBEARER</code>), or <code>unknown</code> if the mechanism could not be determined. The <code>outcome</code> label is <code>success</code> or <code>failure</code>.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-prometheus-metrics-operator-operator">8.2. Overview of operator metrics</h3>
+     <div class="paragraph _abstract">
+      <p>The Kroxylicious Operator is implemented using the <a href="https://javaoperatorsdk.io/">Java Operator SDK</a>. The Java Operator SDK exposes metrics that allow its behavior to be understood. These metrics are enabled by default in the Kroxylicious Operator.</p>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="https://github.com/operator-framework/java-operator-sdk/blob/v5.0.4/docs/content/en/docs/features/_index.md#operator-sdk-metrics">Java Operator SDK metric documentation</a> to learn more about metrics.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-operator-ingesting-metrics-operator">8.3. Ingesting metrics</h3>
+     <div class="paragraph _abstract">
+      <p>Metrics from the Kroxylicious Proxy and Kroxylicious Operator can be ingested into your Prometheus instance. The proxy and the operator each expose an HTTP endpoint for Prometheus metrics at the <code>/metrics</code> address. The endpoint does not require authentication.</p>
+     </div>
+     <div class="paragraph">
+      <p>For the Proxy, the port that exposes the scrape endpoint is named <code>management</code>. For the Operator, the port is named <code>http</code>.</p>
+     </div>
+     <div class="paragraph">
+      <p>Prometheus can be configured to ingest the metrics from the scrape endpoints.</p>
+     </div>
+     <div class="paragraph">
+      <p>This guide assumes you are using the <a href="https://prometheus-operator.dev/">Prometheus Operator</a> to configure Prometheus.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-operator-ingesting-metrics-operator-operator">8.3.1. Ingesting operator metrics</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to ingest metrics from the Kroxylicious Operator into Prometheus.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Kroxylicious Operator is installed.</p>
+        </li>
+        <li>
+         <p><a href="https://prometheus-operator.dev/">Prometheus Operator</a> is installed, and a Prometheus instance has been created using the <a href="https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.Prometheus"><code>Prometheus</code> custom resource</a>.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Apply the PodMonitor configuration:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">apiVersion</span>: <span class="string"><span class="content">monitoring.coreos.com/v1</span></span>
+<span class="key">kind</span>: <span class="string"><span class="content">PodMonitor</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">operator</span></span>
+<span class="key">spec</span>:
+  <span class="key">selector</span>:
+    <span class="key">matchLabels</span>:
+      <span class="key">app.kubernetes.io/name</span>: <span class="string"><span class="content">kroxylicious</span></span>
+      <span class="key">app.kubernetes.io/component</span>: <span class="string"><span class="content">operator</span></span>
+  <span class="key">podMetricsEndpoints</span>:
+  - <span class="string"><span class="content">path: /metrics</span></span>
+    <span class="key">port</span>: <span class="string"><span class="content">http</span></span></code></pre>
+          </div>
+         </div>
+         <div class="paragraph">
+          <p>The Prometheus Operator reconfigures Prometheus automatically. Prometheus begins to regularly to scrape the Kroxylicious Operator’s metric.</p>
+         </div>
+        </li>
+        <li>
+         <p>Check the metrics are being ingested using a PromQL query such as:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code>operator_sdk_reconciliations_queue_size_kafkaproxyreconciler{kind="KafkaProxy", group="kroxylicious.io"}</code></pre>
+          </div>
+         </div>
+        </li>
+       </ol>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-operator-ingesting-metrics-proxy-operator">8.3.2. Ingesting proxy metrics</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to ingest metrics from the Kroxylicious Proxy into Prometheus.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Kroxylicious Operator is installed.</p>
+        </li>
+        <li>
+         <p>An instance of Kroxylicious deployed by the operator.</p>
+        </li>
+        <li>
+         <p><a href="https://prometheus-operator.dev/">Prometheus Operator</a> is installed, and a Prometheus instance has been created using the <a href="https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.Prometheus"><code>Prometheus</code> custom resource</a>.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Apply the PodMonitor configuration:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">apiVersion</span>: <span class="string"><span class="content">monitoring.coreos.com/v1</span></span>
+<span class="key">kind</span>: <span class="string"><span class="content">PodMonitor</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">proxy</span></span>
+<span class="key">spec</span>:
+  <span class="key">selector</span>:
+    <span class="key">matchLabels</span>:
+      <span class="key">app.kubernetes.io/name</span>: <span class="string"><span class="content">kroxylicious</span></span>
+      <span class="key">app.kubernetes.io/component</span>: <span class="string"><span class="content">proxy</span></span>
+  <span class="key">podMetricsEndpoints</span>:
+  - <span class="string"><span class="content">path: /metrics</span></span>
+    <span class="key">port</span>: <span class="string"><span class="content">management</span></span></code></pre>
+          </div>
+         </div>
+         <div class="paragraph">
+          <p>The Prometheus Operator reconfigures Prometheus automatically. Prometheus begins to regularly to scrape the proxy’s metric.</p>
+         </div>
+        </li>
+        <li>
+         <p>Check the metrics are being ingested using a PromQL query such as:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code>kroxylicious_build_info</code></pre>
+          </div>
+         </div>
+        </li>
+       </ol>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-operator-setting-log-levels-operator">8.4. Setting log levels</h3>
+     <div class="paragraph _abstract">
+      <p>You can independently control the logging level of both the Kroxylicious Operator and the Kroxylicious Proxy.</p>
+     </div>
+     <div class="paragraph">
+      <p>In both cases, logging levels are controlled using two environment variables:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>KROXYLICIOUS_APP_LOG_LEVEL</code> controls the logging of the application (<code>io.kroxylicious</code> loggers). It defaults to <code>INFO</code>.</p>
+       </li>
+       <li>
+        <p><code>KROXYLICIOUS_ROOT_LOG_LEVEL</code> controls the logging level at the root. It defaults to <code>WARN</code>.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>When trying to diagnose a problem, start first by raising the logging level of <code>KROXYLICIOUS_APP_LOG_LEVEL</code>. If more detailed diagnostics are required, try raising the <code>KROXYLICIOUS_ROOT_LOG_LEVEL</code>. Both the proxy and operator use Apache Log4J2 and use logging levels understood by it: <code>TRACE</code>, <code>DEBUG</code>, <code>INFO</code>, <code>WARN</code>, and <code>ERROR</code>.</p>
+     </div>
+     <div class="admonitionblock warning">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+         <td class="content">Running the operator or the proxy at elevated logging levels, such as <code>DEBUG</code> or <code>TRACE</code>, can generate a large volume of logs, which may consume significant storage and affect performance. Run at these levels only as long as necessary.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-operator-setting-log-levels-proxy-operator">8.4.1. Overriding proxy logging levels</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to override the logging level of the Kroxylicious Proxy.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>An instance of Kroxylicious deployed by the Kroxylicious Operator.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Apply the <code>KROXYLICIOUS_APP_LOG_LEVEL</code> or <code>KROXYLICIOUS_ROOT_LOG_LEVEL</code> environment variable to the proxy’s Kubernetes <code>Deployment</code> resource:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="bash">kubectl set env -n &lt;namespace&gt; deployment &lt;deployment_name&gt; KROXYLICIOUS_APP_LOG_LEVEL=DEBUG</code></pre>
+          </div>
+         </div>
+         <div class="paragraph">
+          <p>The <code>Deployment</code> resource has the same name as the <code>KafkaProxy</code>.</p>
+         </div>
+         <div class="paragraph">
+          <p>Kubernetes recreates the proxy pod automatically.</p>
+         </div>
+        </li>
+        <li>
+         <p>Verify that the new logging level has taken affect:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="bash">kubectl logs -f -n &lt;namespace&gt; deployment/&lt;deployment_name&gt;</code></pre>
+          </div>
+         </div>
+        </li>
+       </ol>
+      </div>
+      <div class="sect4">
+       <h5 id="reverting_proxy_logging_levels">Reverting proxy logging levels</h5>
+       <div class="paragraph">
+        <p>This procedure describes how to revert the logging level of the Kroxylicious Proxy back to its defaults.</p>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>An instance of Kroxylicious deployed by the Kroxylicious Operator.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Remove the <code>KROXYLICIOUS_APP_LOG_LEVEL</code> or <code>KROXYLICIOUS_ROOT_LOG_LEVEL</code> environment variable from the proxy’s Kubernetes Deployment:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="bash">kubectl set env -n &lt;namespace&gt; deployment &lt;deployment_name&gt; KROXYLICIOUS_APP_LOG_LEVEL-</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>Kubernetes recreates the proxy pod automatically.</p>
+          </div>
+         </li>
+         <li>
+          <p>Verify that the logging level has reverted to its default:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="bash">kubectl logs -f -n &lt;namespace&gt; deployment/&lt;deployment_name&gt;</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-operator-setting-log-levels-operator-bundle-operator">8.4.2. Overriding the operator logging level (operator installed by bundle)</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to override the logging level of the Kroxylicious Operator. It applies when the operator was installed from the YAML bundle.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Kroxylicious Operator installed from the YAML bundle.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Apply the <code>KROXYLICIOUS_APP_LOG_LEVEL</code> or <code>KROXYLICIOUS_ROOT_LOG_LEVEL</code> environment variable to the operator’s Kubernetes Deployment:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="bash">kubectl set env -n kroxylicious-operator deployment kroxylicious-operator KROXYLICIOUS_APP_LOG_LEVEL=DEBUG</code></pre>
+          </div>
+         </div>
+         <div class="paragraph">
+          <p>Kubernetes recreates the operator pod automatically.</p>
+         </div>
+        </li>
+        <li>
+         <p>Verify that the new logging level has taken affect:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="bash">kubectl logs -f -n kroxylicious-operator deployment/kroxylicious-operator</code></pre>
+          </div>
+         </div>
+        </li>
+       </ol>
+      </div>
+      <div class="sect4">
+       <h5 id="reverting_operator_logging_levels">Reverting operator logging levels</h5>
+       <div class="paragraph">
+        <p>This procedure describes how to revert the logging level of the Kroxylicious Operator back to its defaults.</p>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>Kroxylicious Operator installed from the YAML bundle.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Remove the <code>KROXYLICIOUS_APP_LOG_LEVEL</code> or <code>KROXYLICIOUS_ROOT_LOG_LEVEL</code> environment variable from the proxy’s Kubernetes Deployment:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="bash">kubectl set env -n kroxylicious-operator deployment kroxylicious-operator KROXYLICIOUS_APP_LOG_LEVEL-</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>Kubernetes recreates the operator pod automatically</p>
+          </div>
+         </li>
+         <li>
+          <p>Verify that the logging level has reverted to its default:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="bash">kubectl logs -f -n kroxylicious-operator deployment/kroxylicious-operator</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="glossary">9. Glossary</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Glossary of terms used in the Kroxylicious documentation.</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">API</dt>
+      <dd>
+       <p>Application Programmer Interface.</p>
+      </dd>
+      <dt class="hdlist1">CA</dt>
+      <dd>
+       <p>Certificate Authority. An organization that issues certificates.</p>
+      </dd>
+      <dt class="hdlist1">CR</dt>
+      <dd>
+       <p>Custom Resource. An instance resource of a CRD. In other words, a resource of a kind that is not built into Kubernetes.</p>
+      </dd>
+      <dt class="hdlist1">CRD</dt>
+      <dd>
+       <p>Custom Resource Definition. A Kubernetes API for defining Kubernetes API extensions.</p>
+      </dd>
+      <dt class="hdlist1">mTLS</dt>
+      <dd>
+       <p>Mutual Transport Layer Security. A configuration of TLS where the client presents a certificate to a server, which the server authenticates.</p>
+      </dd>
+      <dt class="hdlist1">TLS</dt>
+      <dd>
+       <p>The Transport Layer Security. A secure transport protocol where a server presents a certificate to a client, which the client authenticates. TLS was previously known as the Secure Sockets Layer (SSL).</p>
+      </dd>
+      <dt class="hdlist1">TCP</dt>
+      <dd>
+       <p>The Transmission Control Protocol.</p>
+      </dd>
+     </dl>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">10. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

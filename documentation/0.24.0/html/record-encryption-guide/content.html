@@ -1,0 +1,3673 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-record-encryption-guide-record-encryption" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Record Encryption Filter</strong> to provide encryption-at-rest for Apache Kafka. Refer to other Kroxylicious guides for information on running the proxy or for advanced topics such as plugin development.</p>
+    </div>
+    <div class="paragraph _abstract">
+     <p>The Kroxylicious Record Encryption filter enhances the security of Kafka messages. The filter uses industry-standard cryptographic techniques to apply encryption to Kafka messages, ensuring the confidentiality of data stored in the Kafka Cluster. By centralizing topic-level encryption, Kroxylicious provides streamlined protection across Kafka clusters.</p>
+    </div>
+    <div class="paragraph">
+     <p>To use the filter, follow these steps:</p>
+    </div>
+    <div class="olist arabic">
+     <ol class="arabic">
+      <li>
+       <p>Set up a Key Management System (KMS)</p>
+      </li>
+      <li>
+       <p>Establish encryption keys within the KMS for securing the topics</p>
+      </li>
+      <li>
+       <p>Configure the filter within Kroxylicious</p>
+      </li>
+     </ol>
+    </div>
+    <div class="paragraph">
+     <p>The filter integrates with a Key Management Service (KMS), which is responsible for the safe storage of sensitive key material. Kroxylicious supports the following KMS providers:</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p>HashiCorp Vault (On-premise, HashiCorp Cloud Platform Vault and Enterprise are supported. Free tier HCP Vault Secrets is not).</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service.</p>
+      </li>
+      <li>
+       <p>Azure Key Vault</p>
+      </li>
+      <li>
+       <p>Fortanix DSM</p>
+      </li>
+      <li>
+       <p>Thales CipherTrust Manager</p>
+      </li>
+     </ul>
+    </div>
+    <div class="paragraph">
+     <p>You can provide implementations for your specific KMS systems. Additional KMS support may be added based on demand.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-record-encryption-overview-record-encryption">1. How encryption works</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The Record Encryption filter uses envelope encryption to encrypt records with symmetric encryption keys. The filter encrypts records from produce requests and decrypts records from fetch responses.</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">Envelope encryption</dt>
+      <dd>
+       <p>Envelope encryption is an industry-standard technique suited for encrypting large volumes of data in an efficient manner. Data is encrypted with a Data Encryption Key (DEK). The DEK is encrypted using a Key Encryption Key (KEK). The KEK is stored securely in a Key Management System (KMS).</p>
+      </dd>
+      <dt class="hdlist1">Symmetric encryption keys</dt>
+      <dd>
+       <p>AES(GCM) 256 bit encryption symmetric encryption keys are used to encrypt and decrypt record data.</p>
+      </dd>
+     </dl>
+    </div>
+    <div class="admonitionblock note">
+     <table>
+      <tbody>
+       <tr>
+        <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+        <td class="content">If you are using Azure Key Vault and Managed HSM is not available, you can use RSA-OAEP-256 encryption, using a 2048-bit (or greater) asymmetric key instead of 256-bit AES-GCM symmetric keys. This approach is not quantum-resistant.</td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="paragraph">
+     <p>The process is as follows:</p>
+    </div>
+    <div class="olist arabic">
+     <ol class="arabic">
+      <li>
+       <p>The filter intercepts produce requests from producing applications and transforms them by encrypting the records.</p>
+      </li>
+      <li>
+       <p>The produce request is forwarded to the broker.</p>
+      </li>
+      <li>
+       <p>The filter intercepts fetch responses from the broker and transforms them by decrypting the records.</p>
+      </li>
+      <li>
+       <p>The fetch response is forwarded to the consuming application.</p>
+      </li>
+     </ol>
+    </div>
+    <div class="paragraph">
+     <p>The filter encrypts the record value only. Record keys, headers, and timestamps are not encrypted.</p>
+    </div>
+    <div class="paragraph">
+     <p>The entire process is transparent from the point of view of Kafka clients and Kafka brokers. Neither are aware that the records are being encrypted, nor do they have any access to the encryption keys or have any influence on the ciphering process to secure the records.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="how_the_filter_encrypts_records">1.1. How the filter encrypts records</h3>
+     <div class="paragraph">
+      <p>The filter encrypts records from produce requests as follows:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>Filter selects a KEK to apply.</p>
+       </li>
+       <li>
+        <p>Requests the KMS to generate a DEK for the KEK.</p>
+       </li>
+       <li>
+        <p>Uses an encrypted DEK (DEK encrypted with the KEK) to encrypt the record.</p>
+       </li>
+       <li>
+        <p>Replaces the original record with a ciphertext record (encrypted record, encrypted DEK, and metadata).</p>
+       </li>
+      </ol>
+     </div>
+     <div class="paragraph">
+      <p>The filter uses a DEK reuse strategy. Encrypted records are sent to the same topic using the same DEK until a time-out or an encryption limit is reached.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="how_the_filter_decrypts_records">1.2. How the filter decrypts records</h3>
+     <div class="paragraph">
+      <p>The filter decrypts records from fetch responses as follows:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>Filter receives a cipher record from the Kafka broker.</p>
+       </li>
+       <li>
+        <p>Reverses the process that constructed the cipher record.</p>
+       </li>
+       <li>
+        <p>Uses KMS to decrypt the DEK.</p>
+       </li>
+       <li>
+        <p>Uses the decrypted DEK to decrypt the encrypted record.</p>
+       </li>
+       <li>
+        <p>Replaces the cipher record with a decrypted record.</p>
+       </li>
+      </ol>
+     </div>
+     <div class="paragraph">
+      <p>The filter uses an LRU (least recently used) strategy for caching decrypted DEKs. Decrypted DEKs are kept in memory to reduce interactions with the KMS.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="how_the_filter_uses_the_kms">1.3. How the filter uses the KMS</h3>
+     <div class="paragraph">
+      <p>To support the filter, the KMS provides the following:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>A secure repository for storing Key Encryption Keys (KEKs)</p>
+       </li>
+       <li>
+        <p>A service for generating and decrypting Data Encryption Keys (DEKs)</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>KEKs stay within the KMS. The KMS generates a DEK (which is securely generated random data) for a given KEK, then returns the DEK and an encrypted DEK. The encrypted DEK has the same data but encrypted with the KEK. The KMS doesn’t store encrypted DEKs; they are stored as part of the cipher record in the broker.</p>
+     </div>
+     <div class="admonitionblock warning">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+         <td class="content">The KMS must be available during runtime. If the KMS is unavailable, the filter will not be able to obtain new encrypted DEKs on the produce path or decrypt encrypted DEKs on the consume path. The filter will continue to use previously obtained DEKs, but eventually, production and consumption will become impossible. It is recommended to use the KMS in a high availability (HA) configuration.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="practicing_key_rotation">1.4. Practicing key rotation</h3>
+     <div class="paragraph">
+      <p>Key rotation involves periodically replacing cryptographic keys with new ones and is considered a best practice in cryptography.</p>
+     </div>
+     <div class="paragraph">
+      <p>The filter allows the rotation of Key Encryption Keys (KEKs) within the Key Management System (KMS). When a KEK is rotated, the new key material is eventually used for newly produced records. Existing records, encrypted with older KEK versions, remain decryptable as long as the previous KEK versions are still available in the KMS.</p>
+     </div>
+     <div class="admonitionblock important">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+         <td class="content">If your encrypted topic is receiving regular traffic, the Data Encryption Key (DEK) will be refreshed as new records flow through. However, if messages are infrequent, the DEK might be used for up to 2 hours (by default) after its creation.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>When the KEK is rotated in the external KMS, it will take up to 1 hour (by default) before all records produced by the filter contain a DEK encrypted with the new key material. This is because existing encrypted DEKs are used for a configurable amount of time after creation, the Filter caches the encrypted DEK, one hour after creation they are eligible to be refreshed.</p>
+     </div>
+     <div class="paragraph">
+      <p>If you need to rotate key material immediately, execute a rolling restart of your cluster of Kroxylicious instances.</p>
+     </div>
+     <div class="admonitionblock warning">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+         <td class="content">If an old KEK version is removed from the KMS, records encrypted with that key will become unreadable, causing fetch operations to fail. In such cases, the consumer offset must be advanced beyond those records.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="what_part_of_a_record_is_encrypted">1.5. What part of a record is encrypted?</h3>
+     <div class="paragraph">
+      <p>The record encryption filter encrypts only the values of records, leaving record keys, headers, and timestamps untouched. Null record values, which might represent deletions in compacted topics, are transmitted to the broker unencrypted. This approach ensures that compacted topics function correctly.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="unencrypted_topics">1.6. Unencrypted topics</h3>
+     <div class="paragraph">
+      <p>You may configure the system so that some topics are encrypted and others are not. This supports scenarios where topics with confidential information are encrypted and Kafka topics with non-sensitive information can be left unencrypted.</p>
+     </div>
+     <div class="ulist _additional-resources">
+      <div class="title">Additional resources</div>
+      <ul>
+       <li>
+        <p>For more information on envelope encryption, see the <a href="https://www.nist.gov/publications/recommendation-key-management-part-1-general-1" target="_blank" rel="noopener">NIST Recommendation for Key Management</a>.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-kms-preparing-record-encryption">2. Preparing your KMS</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section assumes that you already have a supported KMS instance up and running. It describes how to prepare the KMS for use with the filter.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-preparing-hashicorp-vault-record-encryption">2.1. Preparing HashiCorp Vault</h3>
+     <div class="paragraph _abstract">
+      <p>To use HashiCorp Vault with the Record Encryption filter, use the following setup:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Enable the Transit Engine as the Record Encryption filter relies on its APIs.</p>
+       </li>
+       <li>
+        <p>Create a Vault policy specifically for the filter with permissions for generating and decrypting Data Encryption Keys (DEKs) for envelope encryption.</p>
+       </li>
+       <li>
+        <p>Obtain a Vault token that includes the filter policy.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="sect3">
+      <h4 id="con-vault-setup-record-encryption">2.1.1. Enable the Transit Engine</h4>
+      <div class="paragraph _abstract">
+       <p>The filter integrates with the <a href="https://developer.hashicorp.com/vault/docs/secrets/transit">HashiCorp Vault <strong>Transit Engine</strong></a>. Vault does not enable the Transit Engine by default. It must be <a href="https://developer.hashicorp.com/vault/docs/secrets/transit#setup">enabled</a> before it can be used by the filter.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="vault_transit_engine_url">Vault Transit Engine URL</h5>
+       <div class="paragraph">
+        <p>The Vault Transit Engine URL is required so the filter knows the location of the Transit Engine within the Vault instance.</p>
+       </div>
+       <div class="paragraph">
+        <p>The URL is formed from the concatenation of the <code>Api Address</code> (reported by Vault during <a href="https://developer.hashicorp.com/vault/tutorials/getting-started/getting-started-dev-server#starting-the-dev-server" target="_blank" rel="noopener">startup</a>) with the complete path to Transit Engine, including the name of the engine itself.</p>
+       </div>
+       <div class="paragraph">
+        <p>If <a href="https://developer.hashicorp.com/vault/docs/enterprise/namespaces">Namespacing</a> is used on the Vault instance, the path must include the namespaces. The URL will end with <code>/transit</code> unless the <code>-path</code> parameter was used when <a href="https://developer.hashicorp.com/vault/docs/secrets/transit#setup">enabling the engine</a>.</p>
+       </div>
+       <div class="paragraph">
+        <p>If namespacing is not in use, the URL looks like this:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">https://myvaultinstance:8200/v1/transit</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>If namespacing is in use, the path must include the namespaces. For example, if there is a parent namespace is <code>a</code> and a child namespace is <code>b</code>, the URL looks like this:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">https://myvaultinstance:8200/v1/a/b/transit</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>If the name of the Transit engine was changed (using the <code>-path</code> argument to the <code>vault secrets enable transit</code> command) the URL looks like this:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">https://myvaultinstance:8200/v1/mytransit</code></pre>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="role_of_the_administrator">Role of the administrator</h5>
+       <div class="paragraph">
+        <p>To use the filter, an administrator or an administrative process must create the encryption keys within Vault, which are used by the <a href="#con-record-encryption-overview-record-encryption">envelope encryption</a> process.</p>
+       </div>
+       <div class="paragraph">
+        <p>The organization deploying the Record Encryption filter is responsible for managing this administrator or process.</p>
+       </div>
+       <div class="paragraph">
+        <p>The administrator must have permissions to create keys beneath <code>transit/keys/KEK-*</code> in the Vault hierarchy.</p>
+       </div>
+       <div class="paragraph">
+        <p>As a guideline, the minimal Vault policy required by the administrator is as follows:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">path "transit/keys/KEK-*" {
+  capabilities = ["read", "write"]
+}</code></pre>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="establish_an_application_identity_for_the_filter">Establish an application identity for the filter</h5>
+       <div class="paragraph">
+        <p>The filter must authenticate to Vault in order to perform envelope encryption operations, such as generating and decrypting DEKs Therefore, a Vault identity with sufficient permissions must be created for the filter.</p>
+       </div>
+       <div class="paragraph">
+        <p>Create a Vault policy for the filter:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">vault policy write kroxylicious_encryption_filter_policy - &lt;&lt; EOF
+path "transit/keys/KEK-*" {
+  capabilities = ["read"]
+}
+path "/transit/datakey/plaintext/KEK-*" {
+  capabilities = ["update"]
+}
+path "transit/decrypt/KEK-*" {
+  capabilities = ["update"]
+}
+EOF</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>Create a <a href="https://developer.hashicorp.com/vault/docs/concepts/tokens#periodic-tokens">Periodic</a> (long-lived) Vault Token for the filter:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">vault token create -display-name "kroxylicious record encryption" \
+                   -policy=kroxylicious_encryption_filter_policy \
+                   -period=768h \
+                   -no-default-policy \
+                   -orphan</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>where:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>The <code>-period</code> switch causes the token to be periodic (with every renewal using the given period).</p>
+         </li>
+         <li>
+          <p>The <code>-no-default-policy</code> switch detaches the policy from the default policy. This is done so the token has least-privilege.</p>
+         </li>
+         <li>
+          <p>The <code>-orphan</code> switch create the token with no parent. This is done so that expiration of a parent won’t expire the token used by the filter.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">The example token create command illustrates the use of <code>-no-default-policy</code> and <code>-orphan</code>. The use of these flags is not functionally important. You may adapt the configuration of the token to suit the standards required by your organization.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="paragraph">
+        <p>The <code>token create</code> command yields the <code>token</code>. The <code>token</code> value is required later when configuring the vault within the filter.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code>token              hvs.CAESIFJ_HHo0VnnW6DSbioJ80NqmuYm2WlON-QxAPmiJScZUGh4KHGh2cy5KdkdFZUJMZmhDY0JCSVhnY2JrbUNEWnE
+token_accessor     4uQZJbEnxW4YtbDBaW6yVzwP
+token_policies     [kroxylicious_encryption_filter_policy]</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>The token must be <a href="https://developer.hashicorp.com/vault/docs/concepts/tokens#token-time-to-live-periodic-tokens-and-explicit-max-ttls">renewed</a> before expiration. It is the responsibility of the administrator to do this.</p>
+       </div>
+       <div class="paragraph">
+        <p>This can be done with a command like the following:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">vault token renew --accessor &lt;token_accessor&gt;</code></pre>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="testing_the_application_identity_for_the_filter_using_the_cli">Testing the application identity for the filter using the CLI</h5>
+       <div class="paragraph">
+        <p>To test whether the application identity and the policy are working correctly, a <a href="https://raw.githubusercontent.com/kroxylicious/kroxylicious/v0.24.0/scripts/validate_vault_token.sh">script</a> can be used.</p>
+       </div>
+       <div class="paragraph">
+        <p>First, as the administrator, create a KEK in the hierarchy at this path <code>transit/keys/KEK-testkey</code>.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">VAULT_TOKEN=&lt;kroxylicious encryption filter token&gt; validate_vault_token.sh &lt;kek path&gt;</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>The script should respond <code>Ok</code>. If errors are reported check the policy/token configuration.</p>
+       </div>
+       <div class="paragraph">
+        <p><code>transit/keys/KEK-testkey</code> can now be removed.</p>
+       </div>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-preparing-aws-kms-record-encryption">2.2. Preparing AWS KMS</h3>
+     <div class="paragraph _abstract">
+      <p>To prepare <a href="https://docs.aws.amazon.com//kms/latest/developerguide/overview.html">AWS Key Management Service</a> for use with the Record Encryption filter, use the following setup:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Establish an AWS KMS aliasing convention for keys</p>
+       </li>
+       <li>
+        <p>Create a policies giving permissions to the key aliases.</p>
+       </li>
+       <li>
+        <p>Create a user for use by the filter and attach the policies to it.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>You’ll need a privileged AWS user that is capable of creating users and policies to perform the set-up.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="con-aws-kms-setup-record-encryption">2.2.1. Establish an aliasing convention for keys within AWS KMS</h4>
+      <div class="paragraph _abstract">
+       <p>The filter references KEKs within AWS via an <a href="https://docs.aws.amazon.com//kms/latest/developerguide/alias-about.html">AWS key alias</a>.</p>
+      </div>
+      <div class="paragraph">
+       <p>Establish a naming convention for key aliases to keep the filter’s keys separate from those used by other systems. Here, we use a prefix of KEK- for filter aliases. Adjust the instructions if a different naming convention is used.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="role_of_the_administrator_2">Role of the administrator</h5>
+       <div class="paragraph">
+        <p>To use the filter, an administrator or an administrative process must create the encryption keys within AWS KMS, which are used by the <a href="#con-record-encryption-overview-record-encryption">envelope encryption</a> process.</p>
+       </div>
+       <div class="paragraph">
+        <p>The organization deploying the Record Encryption filter is responsible for managing this administrator or process.</p>
+       </div>
+       <div class="paragraph">
+        <p>The administrator must have permissions to create keys in AWS KMS. As a starting point, the built-in AWS policy <code>AWSKeyManagementServicePowerUser</code> confers sufficient key management privileges.</p>
+       </div>
+       <div class="paragraph">
+        <p>To get started, use the following commands to set up an administrator with permissions suitable for managing encryption keys in KMS through an AWS Cloud Shell. This example illustrates using the user name <code>kroxylicious-admin</code>, but you can choose a different name if preferred. Adjust the instructions accordingly if you use a different user name.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">ADMIN=kroxylicious-admin
+INITIAL_PASSWORD=$(aws secretsmanager get-random-password  --output text)
+CONSOLE_URL=https://$(aws sts get-caller-identity --query Account --output text).signin.aws.amazon.com/console
+aws iam create-user --user-name ${ADMIN}
+aws iam attach-user-policy --user-name ${ADMIN} --policy-arn arn:aws:iam::aws:policy/AWSKeyManagementServicePowerUser
+aws iam attach-user-policy --user-name ${ADMIN} --policy-arn arn:aws:iam::aws:policy/IAMUserChangePassword
+aws iam attach-user-policy --user-name ${ADMIN} --policy-arn arn:aws:iam::aws:policy/AWSCloudShellFullAccess
+aws iam create-login-profile --user-name ${ADMIN} --password "${INITIAL_PASSWORD}" --password-reset-required
+echo Now log in at ${CONSOLE_URL}  with user name ${ADMIN} password "${INITIAL_PASSWORD}" and change the password.</code></pre>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="con-aws-kms-setup-policy-record-encryption">Create an alias-based policy for KEK aliases</h5>
+       <div class="paragraph">
+        <p>Create an alias-based policy granting permissions to use keys aliased by the established alias naming convention.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+cat &gt; /tmp/policy &lt;&lt; EOF
+{
+        "Version": "2012-10-17",
+        "Statement": [
+                {
+                        "Sid": "AliasBasedIAMPolicy",
+                        "Effect": "Allow",
+                        "Action": [
+                                "kms:Encrypt",
+                                "kms:Decrypt",
+                                "kms:GenerateDataKey*",
+                                "kms:DescribeKey"
+                        ],
+                        "Resource": [
+                "arn:aws:kms:*:${AWS_ACCOUNT_ID}:key/*"
+                        ],
+                        "Condition": {
+                                "ForAnyValue:StringLike": {
+                                        "kms:ResourceAliases": "alias/KEK-*"
+                                }
+                        }
+                }
+        ]
+}
+EOF
+aws iam create-policy --policy-name KroxyliciousRecordEncryption --policy-document file:///tmp/policy</code></pre>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="establish_an_authentication_mechanism_for_the_filter">Establish an authentication mechanism for the filter</h5>
+       <div class="paragraph">
+        <p>The filter must authenticate to AWS in order to perform envelope encryption operations, such as generating and decrypting DEKs.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-aws-kms-setup-application-identity-long-term-record-encryption">Authenticating using long-term IAM identity</h5>
+       <div class="paragraph _abstract">
+        <p>This procedure describes how to create a long-term IAM identity for the Record Encryption filter to authenticate to AWS KMS. The process involves creating an IAM user and access key, and attaching an alias-based policy that grants permissions to perform KMS operations on specific KEKs.</p>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">Do not enable console access for this user. The filter requires only API access, and console access would unnecessarily increase the security risk.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>Access to the AWS CLI with sufficient permissions to create and manage IAM users.</p>
+         </li>
+         <li>
+          <p><a href="#con-aws-kms-setup-policy-record-encryption">An alias-based policy created for the Record Encryption filter</a>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Create the IAM user and access key:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam create-user --user-name kroxylicious
+aws iam create-access-key --user-name kroxylicious</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This example uses <code>kroxylicious</code> as the user name, but you can substitute a different name if necessary.</p>
+          </div>
+         </li>
+         <li>
+          <p>Attach the alias-based policy to the IAM identity:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws iam attach-user-policy --user-name kroxylicious --policy-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/KroxyliciousRecordEncryption"</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This step grants the user permission to perform KMS operations on KEKs that use the alias naming convention defined in the <code>KroxyliciousRecordEncryption</code> policy.</p>
+          </div>
+         </li>
+         <li>
+          <p>Verify that the policy has been successfully attached:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam list-attached-user-policies --user-name kroxylicious</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-aws-kms-setup-application-identity-ec2-metadata-record-encryption">Authenticating using AWS EC2 metadata</h5>
+       <div class="paragraph _abstract">
+        <p>This procedure describes how to use AWS EC2 metadata for the Record Encryption filter to authenticate to AWS KMS. The process involves creating a trust policy, creating an IAM role, and attaching an alias-based policy that grants permissions to perform KMS operations on specific KEKs.</p>
+       </div>
+       <div class="paragraph">
+        <p>The filter authenticates using the temporary credentials retrieved from <a href="https://docs.aws.amazon.com//AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials">EC2 instance metadata</a>.</p>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>Access to the AWS CLI with sufficient permissions to create and manage IAM users.</p>
+         </li>
+         <li>
+          <p><a href="#con-aws-kms-setup-policy-record-encryption">An alias-based policy created for the Record Encryption filter</a>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Create a trust policy:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">cat &gt; trustpolicy &lt;&lt; EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sts:AssumeRole"
+            ],
+            "Principal": {
+                "Service": [
+                    "ec2.amazonaws.com"
+                ]
+            }
+        }
+    ]
+}
+EOF</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>The trust policy specifies that the EC2 instance can assume the role, enabling it to retrieve and use temporary credentials for authentication.</p>
+          </div>
+         </li>
+         <li>
+          <p>Create the IAM role using the trust policy:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam create-role --role-name KroxyliciousInstance --assume-role-policy-document file://trustpolicy</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This example uses <code>KroxyliciousInstance</code> as the role name, but you can substitute a different name if necessary.</p>
+          </div>
+         </li>
+         <li>
+          <p>Attach the alias-based policy to the role:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws iam attach-role-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/KroxyliciousRecordEncryption --role-name KroxyliciousInstance</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This step grants the role permission to perform KMS operations on KEKs that use the alias naming convention defined in the <code>KroxyliciousRecordEncryption</code> policy.</p>
+          </div>
+         </li>
+         <li>
+          <p>Verify that the policy has been successfully attached:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam list-attached-role-policies --role-name KroxyliciousInstance</code></pre>
+           </div>
+          </div>
+         </li>
+         <li>
+          <p>Associate the role with the EC2 instance:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws ec2 associate-iam-instance-profile --instance-id &lt;EC2_instance_id&gt; --iam-instance-profile Name="KroxyliciousInstance"</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>Replace <code>&lt;EC2_instance_id&gt;</code> with the instance ID of each AWS EC2 instance hosting a Kroxylicious instance.</p>
+          </div>
+         </li>
+         <li>
+          <p>Verify that the role has been associated with the EC2 instance:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values=&lt;EC2_instance_id&gt;</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-aws-kms-setup-application-identity-pod-identity-record-encryption">Authenticating using EKS Pod Identity</h5>
+       <div class="paragraph _abstract">
+        <p>This procedure describes how to use <a href="https://docs.aws.amazon.com//eks/latest/userguide/pod-identities.html">EKS Pod Identity</a> to authenticate the Record Encryption filter to AWS KMS when Kroxylicious is running on Amazon EKS.</p>
+       </div>
+       <div class="paragraph">
+        <p>EKS Pod Identity is the AWS-recommended successor to IRSA. Compared with IRSA it does not require an OIDC trust-policy edit on the IAM role: instead an in-cluster <strong>Pod Identity Agent</strong> exchanges a projected service-account token for temporary AWS credentials and exposes them on a link-local HTTP endpoint inside each pod. The Record Encryption filter retrieves the credentials from that endpoint and refreshes them automatically before they expire.</p>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>An EKS cluster with the <a href="https://docs.aws.amazon.com//eks/latest/userguide/pod-identities.html">EKS Pod Identity Agent add-on</a> enabled.</p>
+         </li>
+         <li>
+          <p>Access to the AWS CLI with sufficient permissions to create and manage IAM roles and EKS pod-identity associations.</p>
+         </li>
+         <li>
+          <p><a href="#con-aws-kms-setup-policy-record-encryption">An alias-based policy created for the Record Encryption filter</a>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Create a trust policy that allows the EKS Pod Identity service to assume the IAM role:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">cat &gt; trustpolicy &lt;&lt; EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "pods.eks.amazonaws.com"
+            },
+            "Action": [
+                "sts:AssumeRole",
+                "sts:TagSession"
+            ]
+        }
+    ]
+}
+EOF</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>Unlike IRSA there is no OIDC <code>sub</code> / <code>aud</code> condition to misconfigure — the binding from role to service account is established via an EKS pod-identity association in a later step instead.</p>
+          </div>
+         </li>
+         <li>
+          <p>Create the IAM role using the trust policy:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam create-role --role-name KroxyliciousPodIdentity --assume-role-policy-document file://trustpolicy</code></pre>
+           </div>
+          </div>
+         </li>
+         <li>
+          <p>Attach the alias-based policy to the role:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws iam attach-role-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/KroxyliciousRecordEncryption --role-name KroxyliciousPodIdentity</code></pre>
+           </div>
+          </div>
+         </li>
+         <li>
+          <p>Create the pod-identity association binding the role to the Kroxylicious service account:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">CLUSTER_NAME=&lt;eks_cluster_name&gt;
+NAMESPACE=&lt;kroxylicious_namespace&gt;
+SERVICE_ACCOUNT=&lt;kroxylicious_service_account&gt;
+ROLE_ARN=arn:aws:iam::${AWS_ACCOUNT_ID}:role/KroxyliciousPodIdentity
+
+aws eks create-pod-identity-association \
+    --cluster-name "${CLUSTER_NAME}" \
+    --namespace "${NAMESPACE}" \
+    --service-account "${SERVICE_ACCOUNT}" \
+    --role-arn "${ROLE_ARN}"</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>The Pod Identity Agent automatically projects the service-account token and sets the environment variables <code>AWS_CONTAINER_CREDENTIALS_FULL_URI</code> and <code>AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE</code> on each new pod that uses the named service account. The Record Encryption filter reads these environment variables by default, so an empty <code>podIdentityCredentials: {}</code> block in the AWS KMS configuration is sufficient on a properly-associated pod.</p>
+          </div>
+         </li>
+         <li>
+          <p>Restart the Kroxylicious pods so that the agent can inject the projection:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">kubectl -n ${NAMESPACE} rollout restart deployment kroxylicious</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-aws-kms-setup-application-identity-irsa-record-encryption">Authenticating using IAM Roles for Service Accounts (IRSA)</h5>
+       <div class="paragraph _abstract">
+        <p>This procedure describes how to use <a href="https://docs.aws.amazon.com//eks/latest/userguide/iam-roles-for-service-accounts.html">IAM Roles for Service Accounts (IRSA)</a> to authenticate the Record Encryption filter to AWS KMS when Kroxylicious is running on Amazon EKS.</p>
+       </div>
+       <div class="paragraph">
+        <p>The filter authenticates by exchanging the projected service-account OIDC token for temporary credentials from AWS Security Token Service (STS) using the <a href="https://docs.aws.amazon.com//STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html">AssumeRoleWithWebIdentity</a> action. The credentials are refreshed automatically before they expire.</p>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>An EKS cluster with an <a href="https://docs.aws.amazon.com//eks/latest/userguide/enable-iam-roles-for-service-accounts.html">OIDC identity provider</a> enabled.</p>
+         </li>
+         <li>
+          <p>Access to the AWS CLI with sufficient permissions to create and manage IAM roles.</p>
+         </li>
+         <li>
+          <p><a href="#con-aws-kms-setup-policy-record-encryption">An alias-based policy created for the Record Encryption filter</a>.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Identify the OIDC issuer URL of your EKS cluster:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">CLUSTER_NAME=&lt;eks_cluster_name&gt;
+OIDC_PROVIDER=$(aws eks describe-cluster --name "${CLUSTER_NAME}" \
+  --query "cluster.identity.oidc.issuer" --output text | sed -e "s|^https://||")
+echo "${OIDC_PROVIDER}"</code></pre>
+           </div>
+          </div>
+         </li>
+         <li>
+          <p>Create a trust policy that allows the Kubernetes service account hosting Kroxylicious to assume the IAM role:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">NAMESPACE=&lt;kroxylicious_namespace&gt;
+SERVICE_ACCOUNT=&lt;kroxylicious_service_account&gt;
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+cat &gt; trustpolicy &lt;&lt; EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/${OIDC_PROVIDER}"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringEquals": {
+                    "${OIDC_PROVIDER}:sub": "system:serviceaccount:${NAMESPACE}:${SERVICE_ACCOUNT}",
+                    "${OIDC_PROVIDER}:aud": "sts.amazonaws.com"
+                }
+            }
+        }
+    ]
+}
+EOF</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>The <code>sub</code> condition restricts the role to only the named service account, and the <code>aud</code> condition restricts to STS as the audience. This is the part of IRSA that is most often misconfigured — a mismatch here results in <code>InvalidIdentityToken</code> errors at runtime.</p>
+          </div>
+         </li>
+         <li>
+          <p>Create the IAM role using the trust policy:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam create-role --role-name KroxyliciousIRSA --assume-role-policy-document file://trustpolicy</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This example uses <code>KroxyliciousIRSA</code> as the role name, but you can substitute a different name if necessary.</p>
+          </div>
+         </li>
+         <li>
+          <p>Attach the alias-based policy to the role:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">aws iam attach-role-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/KroxyliciousRecordEncryption --role-name KroxyliciousIRSA</code></pre>
+           </div>
+          </div>
+         </li>
+         <li>
+          <p>Annotate the Kroxylicious service account so that the EKS pod-identity webhook injects the role ARN and projected token at pod-creation time:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">ROLE_ARN=arn:aws:iam::${AWS_ACCOUNT_ID}:role/KroxyliciousIRSA
+kubectl -n ${NAMESPACE} annotate serviceaccount ${SERVICE_ACCOUNT} \
+    eks.amazonaws.com/role-arn=${ROLE_ARN} --overwrite</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>The webhook automatically projects the OIDC token at <code>/var/run/secrets/eks.amazonaws.com/serviceaccount/token</code> and sets the environment variables <code>AWS_ROLE_ARN</code> and <code>AWS_WEB_IDENTITY_TOKEN_FILE</code> on the pod. The Record Encryption filter reads these environment variables by default, so an empty <code>webIdentityCredentials: {}</code> block in the AWS KMS configuration is sufficient on a properly-annotated pod.</p>
+          </div>
+         </li>
+         <li>
+          <p>Restart the Kroxylicious pods so that the webhook can inject the projection:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">kubectl -n ${NAMESPACE} rollout restart deployment kroxylicious</code></pre>
+           </div>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-preparing-azure-key-vault-record-encryption">2.3. Preparing Azure Key Vault</h3>
+     <div class="paragraph _abstract">
+      <p>To prepare Azure Key Vault for use with the Record Encryption filter, use the following setup:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Setup Azure resources</p>
+       </li>
+       <li>
+        <p>Establish a naming convention for keys</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>You’ll need a privileged Azure user that is capable of creating users and resources to perform the set-up.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-azure-key-vault-setup-record-encryption">2.3.1. Setting up Azure resources</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to prepare the Azure resources required to use the Kroxylicious Record Encryption filter with Azure Key Vault. This process uses the Azure CLI to create a resource group, provision a key vault, configure a key management user, and establish an authentication method that the filter will use to access the key vault.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>An Azure subscription that includes Azure Key Vault</p>
+        </li>
+        <li>
+         <p>An Azure user with sufficient permissions to create and manage users, resource groups, roles, and resources</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Create a resource group</p>
+         <div class="paragraph">
+          <p>Before you create a key vault, you must create a resource group to contain it.</p>
+         </div>
+         <div class="paragraph">
+          <p>If you deploy Kroxylicious into multiple different environments, you must have separate resource groups and key vaults for each environment.</p>
+         </div>
+         <div class="admonitionblock note">
+          <table>
+           <tbody>
+            <tr>
+             <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+             <td class="content">Resource groups are tied to the region they were created with. While resources (such as key vaults) within a resource group can be deployed to any region, Microsoft recommends that they should be located in the same region as the resource group. Keep this in mind when choosing a region for your resource groups.</td>
+            </tr>
+           </tbody>
+          </table>
+         </div>
+         <div class="paragraph">
+          <p>If using the Azure CLI, you can create a resource group with a command like this:</p>
+         </div>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">az group create --name "my-resource-group" --location "eastus"</code></pre>
+          </div>
+         </div>
+        </li>
+        <li>
+         <p>Create a key vault with the Azure CLI:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">KEY_VAULT_NAME="kroxylicious-key-vault"
+RESOURCE_GROUP_NAME="my-resource-group"
+az keyvault create --name ${KEY_VAULT_NAME} --resource-group ${RESOURCE_GROUP_NAME}</code></pre>
+          </div>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>Key vault names must be unique.</p>
+           </li>
+           <li>
+            <p><code>RESOURCE_GROUP_NAME</code> should match the name of the resource group created in the previous section.</p>
+            <div class="paragraph">
+             <p>There are several methods to create key vault resources in Azure. This step describes how to do this using the Azure CLI. The Microsoft Azure documentation has further instructions on how to create key vaults via the Azure portal, Azure CLI, and Azure PowerShell.</p>
+            </div>
+            <div class="admonitionblock note">
+             <table>
+              <tbody>
+               <tr>
+                <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+                <td class="content">Microsoft’s best practice guide for Azure Key Vault recommends having one key vault per application, per environment, per region. For example, if you have Kroxylicious deployed in your <code>development</code>, <code>test</code>, and <code>production</code> environments, and each of those environments is deployed across two different regions, you would create six key vaults for Kroxylicious — one for each Kroxylicious deployment in each environment in each region.</td>
+               </tr>
+              </tbody>
+             </table>
+            </div>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>Create a key management user.</p>
+         <div class="paragraph">
+          <p>To use the filter, a user such as the <em>Key Vault Owner</em> or any user with the Key Vault Crypto Officer RBAC role must create the encryption keys in the key vault. These keys are used by the <a href="#con-record-encryption-overview-record-encryption">envelope encryption</a> process.</p>
+         </div>
+         <div class="paragraph">
+          <p>When you create a key vault, only the creator (the Key Vault Owner) can manage it. Access to key vaults is controlled through RBAC roles. A user with either the Role Based Access Control Administrator role or the User Access Administrator role can grant those roles to others. For information on exceptions, see the Microsoft documentation.</p>
+         </div>
+         <div class="paragraph">
+          <p>The following Azure CLI commands demonstrate creating a user in Microsoft Entra ID and granting key management RBAC privileges. This example illustrates using the domain <code>example.com</code> but you must use your own domain, such as a <code>*.onmicrosoft.com</code> domain. Substitute the value in the <code>USER_NAME</code> field (<code>kroxylicious-user</code>) for a different username if preferred.</p>
+         </div>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">KEY_VAULT_NAME="kroxylicious-key-vault"
+RESOURCE_GROUP_NAME="my-resource-group"
+
+SUBSCRIPTION_ID=$(az account show --query id --output tsv)
+PORTAL_URL="$(az cloud show --query endpoints.portal --output tsv)/$(az account show --query tenantId --output tsv)"
+
+USER_NAME="kroxylicious-user"
+DEFAULT_DOMAIN=$(az rest --method get --url https://graph.microsoft.com/v1.0/domains --query "value[?isDefault].id" -o tsv)
+USER_PRINCIPAL_NAME="${USER_NAME}@${DEFAULT_DOMAIN}"
+INITIAL_PASSWORD=$(tr -dc 'A-Za-z0-9!?%=' &lt; /dev/urandom | head -c 16)
+
+# Create user
+az ad user create \
+  --display-name "${USER_NAME}" \
+  --user-principal-name "${USER_PRINCIPAL_NAME}" \
+  --password "${INITIAL_PASSWORD}" \
+  --force-change-password-next-sign-in true
+
+# Create RBAC role assignment
+az role assignment create \
+  --role "Key Vault Crypto Officer" \
+  --assignee ${USER_PRINCIPAL_NAME} \
+  --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.KeyVault/vaults/${KEY_VAULT_NAME}"
+
+echo "Now log in at ${PORTAL_URL} with user name ${USER_PRINCIPAL_NAME} and password \"${INITIAL_PASSWORD}\" and change the password."</code></pre>
+          </div>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>View all subscriptions for the logged-in user with <code>az account list</code>, and change the active subscription with <code>az account set</code>.</p>
+           </li>
+           <li>
+            <p>The Azure portal URL varies depending on your current Azure cloud.</p>
+           </li>
+           <li>
+            <p>The Key Vault Crypto Officer role lets a user perform any action on the keys within the key vault identified in the <code>--scope</code>, except managing permissions.</p>
+           </li>
+           <li>
+            <p>The scope in the role assignment command specifies the full scope hierarchy of the key vault. For more information on this format, see the Microsoft documentation.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>Establish an authentication mechanism for the filter.</p>
+         <div class="paragraph">
+          <p>The filter must authenticate to Azure Key Vault in order to perform envelope encryption operations, such as generating and decrypting DEKs. See the following procedures for details of the authentication methods available.</p>
+         </div>
+        </li>
+       </ol>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-azure-key-vault-setup-microsoft-identity-platform-oauth2-record-encryption">Authenticating with Microsoft Identity Platform via OAuth 2.0</h5>
+       <div class="paragraph _abstract">
+        <p>This procedure describes how to create a Service Principal (an application identity) within Microsoft Entra ID to allow the Record Encryption filter to authenticate to Azure Key Vault using the OAuth 2.0 Client Credentials flow. The process uses the Azure CLI to create the application identity and assign the required Azure Role-Based Access Control (RBAC) role.</p>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">This identity is used solely for application-to-application (machine-to-machine) authentication. Grant the Service Principal only the minimum permissions needed to access Azure Key Vault to avoid increasing security risk.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>Access to the Azure CLI</p>
+         </li>
+         <li>
+          <p>A user with permissions to create and manage service principals and RBAC roles</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Create the service principal and retrieve the credentials:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">az ad sp create-for-rbac --name "kroxylicious" --query '[appId, password, tenant, appId]' --output tsv</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>This command creates the Service Principal and outputs, in order, the Client ID, Client Secret, Tenant ID, and App ID of the Service Principal. You require the Principal ID for the next step. You can replace <code>kroxylicious</code> with a different user name.</p>
+          </div>
+         </li>
+         <li>
+          <p>Assign the built-in Azure Key Vault RBAC role to the service principal:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">PRINCIPAL_ID="00000000-0000-0000-0000-000000000000"
+KEY_VAULT_NAME="kroxylicious-key-vault"
+RESOURCE_GROUP="my-resource-group"
+SCOPE_ID=$(az keyvault show --name ${KEY_VAULT_NAME} --resource-group ${RESOURCE_GROUP} --query "id" --output tsv)
+az role assignment create --assignee ${PRINCIPAL_ID} --role "Key Vault Crypto Service Encryption User" --scope ${SCOPE_ID}</code></pre>
+           </div>
+          </div>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p>Set <code>PRINCIPAL_ID</code> to the App ID output in the previous step.</p>
+            </li>
+            <li>
+             <p>Set <code>RESOURCE_GROUP</code> to the resource group where your key vault is deployed.</p>
+             <div class="paragraph">
+              <p>These commands assign the built-in Key Vault Crypto Service Encryption User role to the Service Principal, scoped to the target Key Vault. Replace <code>KEY_VAULT_NAME</code> and <code>RESOURCE_GROUP</code> with your actual values.</p>
+             </div>
+            </li>
+           </ul>
+          </div>
+         </li>
+         <li>
+          <p>(Optional) If you do not use the built-in RBAC roles, assign the following permissions to the managed identity instead:</p>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p><code>Microsoft.KeyVault/vaults/keys/read</code></p>
+            </li>
+            <li>
+             <p><code>Microsoft.KeyVault/vaults/keys/wrap/action</code></p>
+            </li>
+            <li>
+             <p><code>Microsoft.KeyVault/vaults/keys/unwrap/action</code></p>
+             <div class="paragraph">
+              <p>If you are using Managed HSM, also assign <code>Microsoft.KeyVault/managedhsms/rng/action</code>.</p>
+             </div>
+            </li>
+           </ul>
+          </div>
+         </li>
+         <li>
+          <p>Verify that the Service Principal has the correct role assignment and scope:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">PRINCIPAL_ID="00000000-0000-0000-0000-000000000000"
+SCOPE_ID=$(az keyvault show --name ${KEY_VAULT_NAME} --resource-group ${RESOURCE_GROUP} --query "id" --output tsv)
+az role assignment list --assignee "${PRINCIPAL_ID}" --query '[].{Role:roleDefinitionName, Scope:scope}' --output tsv --scope ${SCOPE_ID}</code></pre>
+           </div>
+          </div>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p><code>PRINCIPAL_ID</code> is the object identifier (Service Principal App ID) we output in the first step.</p>
+             <div class="paragraph">
+              <p>Confirm that the output shows the Key Vault Crypto Service Encryption User role and the full resource ID of your key vault (for example, <code>/subscriptions/…​/resourceGroups/…​/vaults/kroxylicious-key-vault</code>).</p>
+             </div>
+            </li>
+           </ul>
+          </div>
+         </li>
+        </ol>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="proc-azure-key-vault-setup-microsoft-entra-managed-identity-record-encryption">Authenticating with Managed Identities for Azure resources</h5>
+       <div class="paragraph _abstract">
+        <p>This procedure describes how to use a System-assigned Managed Identity (on the Azure resource where Kroxylicious is deployed) to allow the Record Encryption filter to authenticate to Azure Key Vault. The process uses the Azure CLI to enable the identity on the hosting resource and grant it the required Azure Role-Based Access Control (RBAC) role.</p>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">A Managed Identity is a type of Service Principal that Azure manages automatically and does not require credentials. Assigning RBAC roles to a Managed Identity follows the same process as for other Service Principals.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="ulist">
+        <div class="title">Prerequisites</div>
+        <ul>
+         <li>
+          <p>Access to the Azure CLI</p>
+         </li>
+         <li>
+          <p>A user with sufficient permissions to manage the hosting resource and assign RBAC roles.</p>
+         </li>
+         <li>
+          <p>The Azure resource that hosts Kroxylicious must be provisioned in advance.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="olist arabic">
+        <div class="title">Procedure</div>
+        <ol class="arabic">
+         <li>
+          <p>Enable the system-assigned managed identity on the hosting resource:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">HOST_RESOURCE_NAME="kroxylicious-host"
+HOST_RESOURCE_GROUP="my-resource-group"
+az &lt;RESOURCE_TYPE&gt; identity assign \
+  --name ${HOST_RESOURCE_NAME} \
+  --resource-group ${HOST_RESOURCE_GROUP} \
+  --query "systemAssignedIdentity" --output tsv</code></pre>
+           </div>
+          </div>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p>Set <code>HOST_RESOURCE_NAME</code> to the name of the Azure resource that hosts Kroxylicious.</p>
+            </li>
+            <li>
+             <p>Replace <strong>&lt;RESOURCE_TYPE&gt;</strong> with the correct Azure CLI subcommand for your resource type (for example, <code>vm</code>).</p>
+            </li>
+            <li>
+             <p>The command outputs the identifier of the system-assigned managed identity. Use this identifier in the next step.</p>
+            </li>
+           </ul>
+          </div>
+         </li>
+         <li>
+          <p>Assign the built-in Azure Key Vault RBAC role to the managed identity:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">SYSTEM_ASSIGNED_ID="x.kroxylicious-host"
+KEY_VAULT_NAME="kroxylicious-key-vault"
+RESOURCE_GROUP="my-resource-group"
+SCOPE_ID=$(az keyvault show --name ${KEY_VAULT_NAME} --resource-group ${RESOURCE_GROUP} --query "id" --output tsv)
+az role assignment create --assignee ${SYSTEM_ASSIGNED_ID} --role "Key Vault Crypto Service Encryption User" --scope ${SCOPE_ID}</code></pre>
+           </div>
+          </div>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p>Set <code>SYSTEM_ASSIGNED_ID</code> to the managed identity’s identifier from the previous step.</p>
+            </li>
+            <li>
+             <p>Set <code>RESOURCE_GROUP</code> to the name of the resource group that contains your key vault. This may differ from the resource group that hosts Kroxylicious.</p>
+             <div class="paragraph">
+              <p>These commands assign the built-in Key Vault Crypto Service Encryption User role to the Managed Identity, using the target Key Vault as the scope. Replace <code>HOST_RESOURCE_NAME</code>, <code>KEY_VAULT_NAME</code>, and <code>RESOURCE_GROUP</code> with your actual values.</p>
+             </div>
+            </li>
+           </ul>
+          </div>
+         </li>
+         <li>
+          <p>(Optional) If you do not use the built-in RBAC roles, assign the following permissions to the managed identity instead:</p>
+          <div class="ulist">
+           <ul>
+            <li>
+             <p><code>Microsoft.KeyVault/vaults/keys/read</code></p>
+            </li>
+            <li>
+             <p><code>Microsoft.KeyVault/vaults/keys/wrap/action</code></p>
+            </li>
+            <li>
+             <p><code>Microsoft.KeyVault/vaults/keys/unwrap/action</code></p>
+             <div class="paragraph">
+              <p>If you are using Managed HSM, also assign <code>Microsoft.KeyVault/managedhsms/rng/action</code>.</p>
+             </div>
+            </li>
+           </ul>
+          </div>
+         </li>
+         <li>
+          <p>Confirm the role has been successfully assigned:</p>
+          <div class="listingblock">
+           <div class="content">
+            <pre class="CodeRay highlight"><code data-lang="shell">SYSTEM_ASSIGNED_ID="x.kroxylicious-host"
+az role assignment list --assignee ${SYSTEM_ASSIGNED_ID} --query '[].{Role:roleDefinitionName, Scope:scope}' --output tsv</code></pre>
+           </div>
+          </div>
+          <div class="paragraph">
+           <p>The output lists the Key Vault Crypto Service Encryption User role and the full resource ID of your key vault.</p>
+          </div>
+         </li>
+        </ol>
+       </div>
+       <div class="ulist _additional-resources">
+        <div class="title">Additional resources</div>
+        <ul>
+         <li>
+          <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/general/overview" target="_blank" rel="noopener">Azure Key Vault overview</a></p>
+         </li>
+         <li>
+          <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices" target="_blank" rel="noopener">Azure Key Vault security best practices</a></p>
+         </li>
+         <li>
+          <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys" target="_blank" rel="noopener">Azure Key Vault keys</a></p>
+         </li>
+         <li>
+          <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-access-policy" target="_blank" rel="noopener">Azure Key Vault access control using RBAC</a></p>
+         </li>
+         <li>
+          <p><a href="https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview" target="_blank" rel="noopener">Azure role-based access control scopes</a></p>
+         </li>
+        </ul>
+       </div>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-preparing-fortanix-dsm-record-encryption">2.4. Preparing Fortanix Data Security Manager (DSM)</h3>
+     <div class="paragraph _abstract">
+      <p>To prepare Fortanix Data Security Manager (DSM) for use with the Record Encryption filter, use the following setup:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Establish a naming convention for keys and choose a Fortanix group where the keys will reside.</p>
+       </li>
+       <li>
+        <p>Create an application identity, with an API key, for the Record Encryption filter.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="sect3">
+      <h4 id="con-fortanix-dsm-setup-record-encryption">2.4.1. Integrate with Fortanix DSM</h4>
+      <div class="paragraph _abstract">
+       <p>The filter integrates with the <a href="https://www.fortanix.com/platform/data-security-manager">Fortanix Data Security Manager (DSM)</a>. Both Fortanix DSM software-as-a service (SaaS) or an on-premise installation are supported.</p>
+      </div>
+      <div class="paragraph">
+       <p>These instructions assume that you are using the <a href="https://support.fortanix.com//docs/clients-command-line-interface-cli-for-fortanix-data-security-manager">Fortanix DSM CLI</a>, but you can use the Fortanix DSM user interface if preferred.</p>
+      </div>
+      <div class="admonitionblock note">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+          <td class="content">The Fortanix KMS plugin for Record Encryption doesn’t yet support keys in the <a href="https://support.fortanix.com/docs/users-guide-key-undo-policy#50-deactivate-and-compromise-key-with-key-undo-policy">Deactivated state</a>. For more information, see the <a href="https://github.com/kroxylicious/kroxylicious/issues/1767" target="_blank" rel="noopener">related issue</a>.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="sect4">
+       <h5 id="fortanix_dsm_cluster_url">Fortanix DSM Cluster URL</h5>
+       <div class="paragraph">
+        <p>The Record Encryption filter requires the URL of the Fortanix DSM cluster.</p>
+       </div>
+       <div class="paragraph">
+        <p>If you are using SaaS, the URL looks like <a href="https://smartkey.io/"><code>https://&lt;region&gt;.smartkey.io</code></a> where <code>region</code> is an identifier such as <code>amer</code>. For more information, see the link: <a href="https://support.fortanix.com//docs/configure-api-client">Fortanix documentation</a>.</p>
+       </div>
+       <div class="paragraph">
+        <p>If using an on-premises instance, talk to the group responsible for it within your organization to find out the URL you should use.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="establish_a_naming_convention_for_keys_within_fortanix_dsm">Establish a naming convention for keys within Fortanix DSM</h5>
+       <div class="paragraph">
+        <p>Establish a naming convention for keys to keep the filter’s keys separate from those used by other systems. Here, we use a prefix of <code>KEK-</code> for filter key name.</p>
+       </div>
+       <div class="paragraph">
+        <p>Choose the Fortanix DSM groups to keep the keys. Here, we assume a group name of <code>topic-keks</code>.</p>
+       </div>
+       <div class="paragraph">
+        <p>Adjust the instructions if a different naming convention is used.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="role_of_the_administrator_3">Role of the administrator</h5>
+       <div class="paragraph">
+        <p>To use the filter, an administrator or an administrative process must create the encryption keys within Fortanix DSM, which are used by the <a href="#con-record-encryption-overview-record-encryption">envelope encryption</a> process.</p>
+       </div>
+       <div class="paragraph">
+        <p>The organization deploying the Record Encryption filter is responsible for managing this administrator or process.</p>
+       </div>
+       <div class="paragraph">
+        <p>The administrator must have permissions to create keys with Fortanix DSM.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="establish_an_application_identity_for_the_filter_2">Establish an application identity for the filter</h5>
+       <div class="paragraph">
+        <p>The filter must authenticate to Fortanix DSM in order to perform the encryption and decryption operations.</p>
+       </div>
+       <div class="paragraph">
+        <p>Create a Fortanix DSM App with sufficient permissions for the filter:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">sdkms-cli --api-endpoint https://&lt;region&gt;.smartkey.io create-app --name kroxylicious --default-group topic-keks --groups topic-keks</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>Retrieve the API key for the app:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">sdkms-cli --api-endpoint https://&lt;region&gt;.smartkey.io get-app-api-key --name kroxylicious</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>The Record Encryption filter uses the API Key in its KMS configuration to authenticate to Fortanix DSM.</p>
+       </div>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-preparing-thales-ctm-record-encryption">2.5. Preparing Thales CipherTrust Manager</h3>
+     <div class="paragraph _abstract">
+      <p>To prepare Thales CipherTrust Manager to use with the Record Encryption filter, configure a group with a least-privilege policy and create an application identity using either client certificate authentication (recommended) or username and password authentication.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="con-thales-ctm-setup-record-encryption">2.5.1. Preparing Thales CipherTrust Manager for Kroxylicious</h4>
+      <div class="paragraph _abstract">
+       <p>To use the Record Encryption filter with Thales CipherTrust Manager (CTM), you must configure CTM with a group, policy, and application identity that has the minimal permissions required for envelope encryption operations.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="ciphertrust_manager_endpoint_url">CipherTrust Manager endpoint URL</h5>
+       <div class="paragraph">
+        <p>The filter requires the CTM endpoint URL to connect to your CipherTrust Manager instance.</p>
+       </div>
+       <div class="paragraph">
+        <p>The URL format depends on your deployment:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>Cloud instance: <code>https://&lt;instance-name&gt;.ciphertrust.io</code></p>
+         </li>
+         <li>
+          <p>On-premises instance: <code>https://&lt;hostname-or-ip&gt;:&lt;port&gt;</code></p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>The filter uses this URL to access the CTM REST API for cryptographic operations.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="prerequisites">Prerequisites</h5>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>Access to the CipherTrust Manager administrative interface</p>
+         </li>
+         <li>
+          <p>The <code>ksctl</code> command-line tool installed and configured to connect to your CTM instance</p>
+         </li>
+         <li>
+          <p>Administrator permissions in CTM to create groups, policies, and users (or client registrations)</p>
+         </li>
+         <li>
+          <p>For client certificate authentication: a Certificate Authority (CA) registered in CipherTrust Manager</p>
+         </li>
+        </ul>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="role_of_the_administrator_4">Role of the administrator</h5>
+       <div class="paragraph">
+        <p>To use the filter, an administrator must:</p>
+       </div>
+       <div class="olist arabic">
+        <ol class="arabic">
+         <li>
+          <p>Create a group for Kroxylicious service account.</p>
+         </li>
+         <li>
+          <p>Configure a policy that grants the minimal permissions Kroxylicious needs and attach the policy to the group.</p>
+         </li>
+         <li>
+          <p>Create a user or client certificate registration for Kroxylicious that is a member of the group.</p>
+         </li>
+        </ol>
+       </div>
+       <div class="paragraph">
+        <p>The organization deploying the Record Encryption filter is responsible for managing this administrator or process.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="create_a_group_for_kroxylicious_service_account">Create a group for Kroxylicious service account</h5>
+       <div class="paragraph">
+        <p>Create a dedicated group in CipherTrust Manager to organize Kroxylicious service accounts or client certificates.</p>
+       </div>
+       <div class="paragraph">
+        <p>Using <code>ksctl</code>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">ksctl groups create \
+  --name "kroxylicious-record-encryption" \
+  --description "Kroxylicious service accounts for record encryption"</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>This group will be used when configuring the access control policy.</p>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="create_a_least_privilege_policy">Create a least-privilege policy</h5>
+       <div class="paragraph">
+        <p>Create a policy that grants only the permissions Kroxylicious needs for envelope encryption operations.</p>
+       </div>
+       <div class="paragraph">
+        <p>The policy must grant these actions:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>ReadKey</code> - Required to get key metadata (used for alias resolution)</p>
+         </li>
+         <li>
+          <p><code>EncryptWithKey</code> - Required to encrypt DEKs with KEKs</p>
+         </li>
+         <li>
+          <p><code>DecryptWithKey</code> - Required to decrypt EDEKs</p>
+         </li>
+         <li>
+          <p><code>UseKey</code> - Also required for crypto operations to work</p>
+         </li>
+        </ul>
+       </div>
+       <div class="admonitionblock important">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+           <td class="content">All four actions are required. The <code>UseKey</code> action might seem redundant alongside <code>EncryptWithKey</code> and <code>DecryptWithKey</code>, but CipherTrust Manager requires it for crypto operations. Without <code>UseKey</code>, encrypt and decrypt operations will fail with <code>403 Forbidden</code> even if the specific actions are granted.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="paragraph">
+        <p>Create the policy JSON file named <code>kroxylicious-policy.json</code>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="json">{
+  <span class="key"><span class="delimiter">"</span><span class="content">name</span><span class="delimiter">"</span></span>: <span class="string"><span class="delimiter">"</span><span class="content">kroxylicious-least-privilege</span><span class="delimiter">"</span></span>,
+  <span class="key"><span class="delimiter">"</span><span class="content">allow</span><span class="delimiter">"</span></span>: <span class="value">true</span>,
+  <span class="key"><span class="delimiter">"</span><span class="content">resources</span><span class="delimiter">"</span></span>: [<span class="string"><span class="delimiter">"</span><span class="content">kylo:kylo:vault:keys:kek-*</span><span class="delimiter">"</span></span>],
+  <span class="key"><span class="delimiter">"</span><span class="content">actions</span><span class="delimiter">"</span></span>: [<span class="string"><span class="delimiter">"</span><span class="content">ReadKey</span><span class="delimiter">"</span></span>, <span class="string"><span class="delimiter">"</span><span class="content">EncryptWithKey</span><span class="delimiter">"</span></span>, <span class="string"><span class="delimiter">"</span><span class="content">DecryptWithKey</span><span class="delimiter">"</span></span>, <span class="string"><span class="delimiter">"</span><span class="content">UseKey</span><span class="delimiter">"</span></span>]
+}</code></pre>
+        </div>
+       </div>
+       <div class="admonitionblock important">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+           <td class="content">The resource pattern must use lowercase <code>kek-*</code> because CTM matches against the key’s URI, which lowercases the key name. A key named <code>KEK-production</code> has the URI <code>kylo:kylo:vault:keys:kek-production</code>.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+       <div class="paragraph">
+        <p>Create the policy using <code>ksctl</code>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">POLICY_RESPONSE=$(ksctl policy create --jsonfile kroxylicious-policy.json)
+POLICY_ID=$(echo "$POLICY_RESPONSE" | jq -r '.id')</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>Record the policy ID. You will need it to attach the policy to the group.</p>
+       </div>
+       <div class="paragraph">
+        <p>This policy ensures that the Kroxylicious application identity:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><strong>Can</strong> perform encryption and decryption operations</p>
+         </li>
+         <li>
+          <p><strong>Can</strong> read key metadata (required for alias resolution)</p>
+         </li>
+         <li>
+          <p><strong>Can</strong> only access keys matching the <code>kek-*</code> pattern</p>
+         </li>
+         <li>
+          <p><strong>Cannot</strong> create, delete, or modify keys</p>
+         </li>
+         <li>
+          <p><strong>Cannot</strong> access keys that do not match the pattern</p>
+         </li>
+         <li>
+          <p><strong>Cannot</strong> perform other admin operations</p>
+         </li>
+        </ul>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="attach_the_policy_to_the_group">Attach the policy to the group</h5>
+       <div class="paragraph">
+        <p>Attach the policy to the group you created.</p>
+       </div>
+       <div class="paragraph">
+        <p>Create a principal JSON file named <code>principal.json</code>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="json">{
+  <span class="key"><span class="delimiter">"</span><span class="content">cust</span><span class="delimiter">"</span></span>: {
+    <span class="key"><span class="delimiter">"</span><span class="content">groups</span><span class="delimiter">"</span></span>: [<span class="string"><span class="delimiter">"</span><span class="content">kroxylicious-record-encryption</span><span class="delimiter">"</span></span>]
+  }
+}</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>Attach the policy using <code>ksctl</code>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="shell">ksctl polattach create \
+  --polid "$POLICY_ID" \
+  --prinjson principal.json</code></pre>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="establish_an_application_identity">Establish an application identity</h5>
+       <div class="paragraph">
+        <p>CipherTrust Manager supports two authentication methods for Kroxylicious:</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><strong>Client certificate authentication</strong> (recommended for production)</p>
+         </li>
+         <li>
+          <p><strong>Username and password authentication</strong> (intended for development and testing)</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>Choose the method that best fits your organization’s security requirements.</p>
+       </div>
+       <div class="sect5">
+        <h6 id="client_certificate_authentication">Client certificate authentication</h6>
+        <div class="paragraph">
+         <p>Client certificate authentication is recommended for production deployments as it provides stronger security and does not require storing passwords.</p>
+        </div>
+        <div class="paragraph">
+         <div class="title">Prerequisites</div>
+         <p>You need a Certificate Authority (CA) registered in CipherTrust Manager that can sign client certificates. This CA should already be configured in your CTM instance.</p>
+        </div>
+        <div class="paragraph">
+         <p>To list available CAs:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">ksctl ca locals list | jq '.resources[] | {name: .name, id: .id}'</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>Record the CA ID of the CA you will use to sign the client certificate.</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">CA_ID=&lt;id of CA&gt;</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <div class="title">Generate client certificate signing request and private key</div>
+         <p>Use <code>ksctl</code> to generate a Certificate Signing Request (CSR) and private key. Algorithm <code>RSA</code> is used so that the private key is generated in RSA format which works well in the Java ecosystem.</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">ksctl ca csr \
+  --alg RSA \
+  --cn "kroxylicious-production" \
+  --csr-outfile kroxylicious-client.csr \
+  --key-outfile kroxylicious-client.key</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>This creates:</p>
+        </div>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>kroxylicious-client.key</code> - The client’s private key</p>
+          </li>
+          <li>
+           <p><code>kroxylicious-client.csr</code> - The certificate signing request</p>
+          </li>
+         </ul>
+        </div>
+        <div class="paragraph">
+         <div class="title">Issue and sign the client certificate</div>
+         <p>Sign the CSR with your CA to create the client certificate:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">ksctl ca locals certs issue \
+  --ca-id "$CA_ID" \
+  --csr-infile kroxylicious-client.csr \
+  --cert-outfile kroxylicious-client.crt \
+  --duration 365 \
+  --purpose client</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>This creates <code>kroxylicious-client.crt</code> - the signed client certificate.</p>
+        </div>
+        <div class="paragraph">
+         <div class="title">Create a client management profile</div>
+         <p>Create a client management profile and associate it with the group:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">PROFILE_RESPONSE=$(ksctl clientmgmt profiles create \
+  --name 'kroxylicious-production')
+PROFILE_ID=$(echo "$PROFILE_RESPONSE" | jq -r '.id')
+
+ksctl clientmgmt profiles update \
+  --profile-id "$PROFILE_ID" \
+  --ca_id "$CA_ID" \
+  --groups 'kroxylicious-record-encryption'</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <div class="title">Create a registration token</div>
+         <p>Create a registration token for the client:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">TOKEN_RESPONSE=$(ksctl clientmgmt tokens create \
+  --ca-id "$CA_ID" \
+  --cert-duration 365 \
+  --client-mgmt-profile-id "$PROFILE_ID")
+REG_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.token')</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <div class="title">Register the client</div>
+         <p>Register the client using the token and client certificate:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">CLIENT_RESPONSE=$(ksctl clientmgmt clients register \
+  --reg-token "$REG_TOKEN" \
+  --cert-file kroxylicious-client.crt)
+CLIENT_ID=$(echo "$CLIENT_RESPONSE" | jq -r '.id')</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>Record the client ID, certificate file path, and private key file path. You will need these for the filter configuration:</p>
+        </div>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p>Client ID: <code>$CLIENT_ID</code></p>
+          </li>
+          <li>
+           <p>Certificate: <code>kroxylicious-client.crt</code></p>
+          </li>
+          <li>
+           <p>Private key: <code>kroxylicious-client.key</code></p>
+          </li>
+         </ul>
+        </div>
+       </div>
+       <div class="sect5">
+        <h6 id="username_and_password_authentication">Username and password authentication</h6>
+        <div class="paragraph">
+         <p>Alternatively, you can create a user account for Kroxylicious.</p>
+        </div>
+        <div class="paragraph">
+         <div class="title">Create the user</div>
+         <p>Generate a strong password and create the user:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell"># Generate a strong random password
+PASSWORD=$(openssl rand -base64 32)
+
+# Create the user
+USER_RESPONSE=$(ksctl users create \
+  --name kroxylicious-service \
+  --pword "$PASSWORD")
+USER_ID=$(echo "$USER_RESPONSE" | jq -r '.user_id')</code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <div class="title">Add the user to the group</div>
+         <p>Add the user to the group you created:</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="shell">ksctl groups adduser \
+  --name kroxylicious-record-encryption \
+  --userid "$USER_ID"</code></pre>
+         </div>
+        </div>
+        <div class="admonitionblock important">
+         <table>
+          <tbody>
+           <tr>
+            <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+            <td class="content">Store the password securely. In production, use the <code>passwordFile</code> option in the filter configuration rather than embedding the password in the configuration file.</td>
+           </tr>
+          </tbody>
+         </table>
+        </div>
+        <div class="admonitionblock note">
+         <table>
+          <tbody>
+           <tr>
+            <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+            <td class="content">If the user account belongs to a specific domain in your CipherTrust Manager hierarchy, you must also specify that domain in the filter configuration using the <code>domain</code> field. When omitted, authentication targets the root domain.</td>
+           </tr>
+          </tbody>
+         </table>
+        </div>
+        <div class="paragraph">
+         <p>Record the username, password, and domain (if applicable). You will need these for the filter configuration.</p>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-record-encryption-filter-record-encryption">3. Configuring the Record Encryption filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section describes at a high level how to configure the Record Encryption filter using a previously prepared KMS. Subsections provide in-depth details.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious.
+        <br>
+        For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+      <li>
+       <p>A KMS has been prepared for use by the filter, with KEKs to encrypt records set up for topics.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure the plugin for your supported KMS, as required.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><a href="#con-vault-plugin-configuration-record-encryption">HashiCorp Vault plugin configuration</a></p>
+         </li>
+         <li>
+          <p><a href="#con-aws-kms-plugin-configuration-record-encryption">AWS KMS plugin configuration</a></p>
+         </li>
+         <li>
+          <p><a href="#con-azure-key-vault-plugin-configuration-record-encryption">Azure Key Vault KMS plugin configuration</a></p>
+         </li>
+         <li>
+          <p><a href="#con-fortanix-dsm-plugin-configuration-record-encryption">Fortanix DSM plugin configuration</a></p>
+         </li>
+         <li>
+          <p><a href="#con-thales-ctm-plugin-configuration-record-encryption">Thales CipherTrust Manager plugin configuration</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+      <li>
+       <p>Create a filter configuration that references the configured KMS plugins.</p>
+       <div class="paragraph">
+        <p>See <a href="#con-record-encryption-filter-config-record-encryption">Filter configuration</a></p>
+       </div>
+      </li>
+      <li>
+       <p>Apply the filter configuration:</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-record-encryption">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-record-encryption">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-vault-plugin-configuration-record-encryption">3.1. HashiCorp Vault plugin configuration</h3>
+     <div class="paragraph _abstract">
+      <p>For HashiCorp Vault, the KMS configuration used by the filter looks like this. Use the Vault Token and Vault Transit Engine URL values from the KMS setup.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">VaultKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">vaultTransitEngineUrl</span>: <span class="string"><span class="content">&lt;vault transit engine service url&gt;</span></span>
+  <span class="key">tls</span>:
+    <span class="comment"># ...</span>
+  <span class="key">vaultToken</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/vault/token</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>VaultKmsService</code>.</p>
+       </li>
+       <li>
+        <p><code>kmsConfig</code> specifies configuration specific to the VaultKmsService.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>vaultTransitEngineUrl</code> provides the <a href="#con-vault-setup-record-encryption">Vault Transit Engine URL</a> including the protocol part, such as <code>https:</code> or <code>http:</code>.</p>
+          </li>
+          <li>
+           <p><code>tls</code> (Optional) TLS trust configuration.</p>
+          </li>
+          <li>
+           <p><code>vaultToken</code> references a file containing the Vault Token.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A TLS client certificate can be specified using a PKCS#12 or JKS key store file.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example TLS client certificate configuration using a PKCS#12 key store file</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">key</span>:
+  <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/cert/server.p12</span></span>
+  <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+  <span class="key">storePassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/store.password</span></span>
+  <span class="key">keyPassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/key.password</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> specifies PKCS#12 file</p>
+       </li>
+       <li>
+        <p><code>storeType</code> specifies the keystore file type. Supported values include <code>PKCS12</code> and <code>JKS</code>.</p>
+       </li>
+       <li>
+        <p><code>storePassword</code> (Optional) specifies a keystore file password.</p>
+       </li>
+       <li>
+        <p><code>keyPassword</code> (Optional) specifies a password for the key entry within the file.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A set of trust anchors for the TLS client can be specified using a PKCS#12 or JKS key store file.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example TLS client trust change configuration using a PKCS#12 key store file</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">trust</span>:
+  <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/cert/server.p12</span></span>
+  <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+  <span class="key">storePassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/store.password</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> specifies PKCS#12 file</p>
+       </li>
+       <li>
+        <p><code>storeType</code> specifies the keystore file type. Supported values include <code>PKCS12</code> and <code>JKS</code>.</p>
+       </li>
+       <li>
+        <p><code>storePassword</code> (Optional) specifies a keystore file password.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-aws-kms-plugin-configuration-record-encryption">3.2. AWS KMS plugin configuration</h3>
+     <div class="paragraph _abstract">
+      <p>For AWS KMS the configuration for authenticating with AWS KMS services looks like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Configuration for authenticating with a long-term IAM identity</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">AwsKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://kms.&lt;region&gt;.amazonaws.com</span></span>
+  <span class="key">tls</span>:
+    <span class="comment"># ...</span>
+  <span class="key">credentials</span>:
+    <span class="key">longTerm</span>:
+      <span class="key">accessKeyId</span>:
+        <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/aws/accessKey</span></span>
+      <span class="key">secretAccessKey</span>:
+        <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/aws/secretKey</span></span>
+  <span class="key">region</span>: <span class="string"><span class="content">&lt;region&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>AwsKmsService</code>.</p>
+       </li>
+       <li>
+        <p><code>kmsConfig</code> specifies the configuration of the KMS service.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>endpointUrl</code> specifies the AWS KMS endpoint URL, which must include the <code>https://</code> scheme.</p>
+          </li>
+          <li>
+           <p><code>credentials</code> groups the authentication configuration.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>longTerm</code> configures the KMS to authenticate with long-term credentials.</p>
+              <div class="ulist">
+               <ul>
+                <li>
+                 <p><code>accessKeyId</code> references a file containing the AWS access key ID.</p>
+                </li>
+                <li>
+                 <p><code>secretAccessKey</code> references a file containing the AWS secret access key.</p>
+                </li>
+               </ul>
+              </div>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>region</code> defines the AWS region identifier where KMS resources are located, such as <code>us-east-1</code>. This must match the region of the KMS endpoint you’re using.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Alternatively, the configuration for authenticating with EC2 metadata looks like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Configuration for authenticating with EC2 metadata</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">AwsKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://kms.&lt;region&gt;.amazonaws.com</span></span>
+  <span class="key">credentials</span>:
+    <span class="key">ec2Metadata</span>:
+      <span class="key">iamRole</span>: <span class="string"><span class="content">&lt;name_of_IAM_role&gt;</span></span>
+      <span class="key">metadataEndpoint</span>: <span class="string"><span class="content">&lt;EC2_metadata_endpoint&gt;</span></span>
+      <span class="key">credentialLifetimeFactor</span>: <span class="string"><span class="content">0.8</span></span>
+  <span class="key">region</span>: <span class="string"><span class="content">&lt;region&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>AwsKmsService</code>.</p>
+       </li>
+       <li>
+        <p><code>kmsConfig</code> specifies the configuration of the KMS service.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>endpointUrl</code> AWS KMS endpoint URL, which must include the <code>https://</code> scheme.</p>
+          </li>
+          <li>
+           <p><code>credentials</code> groups the authentication configuration.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>ec2Metadata</code> configures the KMS to authenticate using EC2 metadata.</p>
+              <div class="ulist">
+               <ul>
+                <li>
+                 <p><code>iamRole</code> specifies the name of the IAM role associated with the EC2 instances hosting Kroxylicious.</p>
+                </li>
+                <li>
+                 <p><code>metadataEndpoint</code> (Optional) specifies the metadata endpoint used to obtain EC2 metadata. Defaults to <code>http://169.254.169.254/</code>. If using IPv6, use <code>http://[fd00:ec2::254]</code> instead.</p>
+                </li>
+                <li>
+                 <p><code>credentialLifetimeFactor</code> (Optional) defines the factor used to determine when to refresh a credential before it expires. Defaults to <code>0.8</code>, which means the credential is refreshed once it reaches 80% of its lifetime.</p>
+                </li>
+               </ul>
+              </div>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>region</code> defines the AWS region identifier where KMS resources are located, such as <code>us-east-1</code>. This must match the region of the KMS endpoint you’re using.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Alternatively, the configuration for authenticating with EKS Pod Identity looks like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Configuration for authenticating with EKS Pod Identity</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">AwsKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://kms.&lt;region&gt;.amazonaws.com</span></span>
+  <span class="key">credentials</span>:
+    <span class="key">podIdentity</span>:
+      <span class="key">credentialsFullUri</span>: <span class="string"><span class="content">http://169.254.170.23/v1/credentials</span></span>
+      <span class="key">authorizationTokenFile</span>: <span class="string"><span class="content">/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token</span></span>
+      <span class="key">credentialLifetimeFactor</span>: <span class="string"><span class="content">0.8</span></span>
+  <span class="key">region</span>: <span class="string"><span class="content">&lt;region&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>AwsKmsService</code>.</p>
+       </li>
+       <li>
+        <p><code>kmsConfig</code> specifies the configuration of the KMS service.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>endpointUrl</code> AWS KMS endpoint URL, which must include the <code>https://</code> scheme.</p>
+          </li>
+          <li>
+           <p><code>credentials</code> groups the authentication configuration.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>podIdentity</code> configures the KMS to authenticate using the EKS Pod Identity agent. All sub-fields are optional and default to the values injected by the agent webhook, so on a properly-associated pod the entire block can be written as <code>credentials: { podIdentity: {} }</code>.</p>
+              <div class="ulist">
+               <ul>
+                <li>
+                 <p><code>credentialsFullUri</code> (Optional) URL of the Pod Identity Agent credentials endpoint. Defaults to the <code>AWS_CONTAINER_CREDENTIALS_FULL_URI</code> environment variable.</p>
+                </li>
+                <li>
+                 <p><code>authorizationTokenFile</code> (Optional) path to the projected service-account token file used to authenticate to the agent. Defaults to the <code>AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE</code> environment variable.</p>
+                </li>
+                <li>
+                 <p><code>credentialLifetimeFactor</code> (Optional) defines the factor used to determine when to refresh a credential before it expires. Defaults to <code>0.8</code>, which means the credential is refreshed once it reaches 80% of its lifetime.</p>
+                </li>
+               </ul>
+              </div>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>region</code> defines the AWS region identifier where KMS resources are located, such as <code>us-east-1</code>. This must match the region of the KMS endpoint you’re using.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Alternatively, the configuration for authenticating with IAM Roles for Service Accounts (IRSA) on Amazon EKS looks like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Configuration for authenticating with IAM Roles for Service Accounts (IRSA)</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">AwsKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://kms.&lt;region&gt;.amazonaws.com</span></span>
+  <span class="key">credentials</span>:
+    <span class="key">webIdentity</span>:
+      <span class="key">roleArn</span>: <span class="string"><span class="content">&lt;arn_of_iam_role&gt;</span></span>
+      <span class="key">webIdentityTokenFile</span>: <span class="string"><span class="content">/var/run/secrets/eks.amazonaws.com/serviceaccount/token</span></span>
+      <span class="key">roleSessionName</span>: <span class="string"><span class="content">&lt;session_name&gt;</span></span>
+      <span class="key">stsEndpointUrl</span>: <span class="string"><span class="content">https://sts.&lt;region&gt;.amazonaws.com</span></span>
+      <span class="key">durationSeconds</span>: <span class="string"><span class="content">3600</span></span>
+      <span class="key">credentialLifetimeFactor</span>: <span class="string"><span class="content">0.8</span></span>
+  <span class="key">region</span>: <span class="string"><span class="content">&lt;region&gt;</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>AwsKmsService</code>.</p>
+       </li>
+       <li>
+        <p><code>kmsConfig</code> specifies the configuration of the KMS service.</p>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>endpointUrl</code> AWS KMS endpoint URL, which must include the <code>https://</code> scheme.</p>
+          </li>
+          <li>
+           <p><code>credentials</code> groups the authentication configuration.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>webIdentity</code> configures the KMS to authenticate using a Kubernetes service-account OIDC token via STS <code>AssumeRoleWithWebIdentity</code>. All sub-fields are optional and default to the values injected by the EKS pod-identity webhook, so on a properly-annotated pod the entire block can be written as <code>credentials: { webIdentity: {} }</code>.</p>
+              <div class="ulist">
+               <ul>
+                <li>
+                 <p><code>roleArn</code> (Optional) ARN of the IAM role to assume. Defaults to the <code>AWS_ROLE_ARN</code> environment variable.</p>
+                </li>
+                <li>
+                 <p><code>webIdentityTokenFile</code> (Optional) path to the projected service-account OIDC token. Defaults to the <code>AWS_WEB_IDENTITY_TOKEN_FILE</code> environment variable.</p>
+                </li>
+                <li>
+                 <p><code>roleSessionName</code> (Optional) the session name reported to AWS CloudTrail. Defaults to the <code>AWS_ROLE_SESSION_NAME</code> environment variable, falling back to a generated <code>kroxylicious-&lt;uuid&gt;</code> value.</p>
+                </li>
+                <li>
+                 <p><code>stsEndpointUrl</code> (Optional) the STS endpoint URL to call. Defaults to <code>https://sts.&lt;region&gt;.amazonaws.com</code> derived from the surrounding <code>region</code> value. Override for non-standard partitions (e.g. China: <code>sts.&lt;region&gt;.amazonaws.com.cn</code>).</p>
+                </li>
+                <li>
+                 <p><code>durationSeconds</code> (Optional) requested duration of the assumed-role session. When omitted, STS uses the role’s configured maximum session duration.</p>
+                </li>
+                <li>
+                 <p><code>credentialLifetimeFactor</code> (Optional) defines the factor used to determine when to refresh a credential before it expires. Defaults to <code>0.8</code>, which means the credential is refreshed once it reaches 80% of its lifetime.</p>
+                </li>
+               </ul>
+              </div>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>region</code> defines the AWS region identifier where KMS resources are located, such as <code>us-east-1</code>. This must match the region of the KMS endpoint you’re using.</p>
+          </li>
+         </ul>
+        </div>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A TLS client certificate can be specified using a PKCS#12 or JKS key store file.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example TLS client certificate configuration using a PKCS#12 key store file</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">key</span>:
+  <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/cert/server.p12</span></span>
+  <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+  <span class="key">storePassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/store.password</span></span>
+  <span class="key">keyPassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/key.password</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> specifies PKCS#12 file</p>
+       </li>
+       <li>
+        <p><code>storeType</code> specifies the keystore file type. Supported values include <code>PKCS12</code> and <code>JKS</code>.</p>
+       </li>
+       <li>
+        <p><code>storePassword</code> (Optional) specifies a keystore file password.</p>
+       </li>
+       <li>
+        <p><code>keyPassword</code> (Optional) specifies a password for the key entry within the file.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A set of trust anchors for the TLS client can be specified using a PKCS#12 or JKS key store file.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example TLS client trust change configuration using a PKCS#12 key store file</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">trust</span>:
+  <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/cert/server.p12</span></span>
+  <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+  <span class="key">storePassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/store.password</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> specifies PKCS#12 file</p>
+       </li>
+       <li>
+        <p><code>storeType</code> specifies the keystore file type. Supported values include <code>PKCS12</code> and <code>JKS</code>.</p>
+       </li>
+       <li>
+        <p><code>storePassword</code> (Optional) specifies a keystore file password.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-azure-key-vault-plugin-configuration-record-encryption">3.3. Azure Key Vault plugin configuration</h3>
+     <div class="paragraph _abstract">
+      <p>For Azure Key Vault the configuration for authenticating with Microsoft Identity Platform looks like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Configuration for authenticating with Microsoft Identity Platform via OAuth 2.0</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">AzureKeyVault</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">keyVaultName</span>: <span class="string"><span class="content">my-key-vault</span></span>
+  <span class="key">keyVaultHost</span>: <span class="string"><span class="content">vault.azure.net</span></span>
+  <span class="key">tls</span>:
+    <span class="comment"># ... client trust configuration for Azure Key Vault</span>
+  <span class="key">oauth2ClientCredentials</span>:
+    <span class="key">oauthEndpoint</span>: <span class="string"><span class="content">https://login.microsoftonline.com</span></span>
+    <span class="key">tenantId</span>: <span class="string"><span class="delimiter">"</span><span class="content">00000000-0000-0000-0000-000000000000</span><span class="delimiter">"</span></span>
+    <span class="key">clientId</span>:
+      <span class="key">passwordFile</span>: <span class="string"><span class="content">/path/to/id</span></span>
+    <span class="key">clientSecret</span>:
+      <span class="key">passwordFile</span>: <span class="string"><span class="content">/path/to/secret</span></span>
+    <span class="key">scope</span>: <span class="string"><span class="content">https://vault.azure.net/.default</span></span>
+    <span class="key">tls</span>:
+      <span class="comment"># ... client trust configuration for Microsoft Identity Platform OAuth2</span></code></pre>
+      </div>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>AzureKeyVault</code>.</p>
+       </li>
+       <li>
+        <p><code>keyVaultName</code> is the name of the key vault the filter uses.</p>
+       </li>
+       <li>
+        <p><code>keyVaultHost</code> is the key vault host name, without the key vault name prefix.</p>
+       </li>
+       <li>
+        <p><code>oauthEndpoint</code> is the URL used for the OAuth 2.0 Client Credentials flow.</p>
+       </li>
+       <li>
+        <p><code>tenantId</code> is the 32-character identifier for the Microsoft Entra tenant where the OAuth credentials were created.</p>
+       </li>
+       <li>
+        <p><code>clientId.passwordFile</code> specifies the file that contains the OAuth client ID.</p>
+       </li>
+       <li>
+        <p><code>clientSecret.passwordFile</code> specifies the file that contains the OAuth client secret.</p>
+       </li>
+       <li>
+        <p><code>scope</code> is the App ID URI of the target resource that the proxy authenticates to (your Azure Key Vault URI).</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Alternatively, the configuration for authenticating with Managed Identities for Azure resources looks like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Configuration for authenticating with Managed Identities for Azure resources</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">AzureKeyVault</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">keyVaultName</span>: <span class="string"><span class="content">my-key-vault</span></span>
+  <span class="key">keyVaultHost</span>: <span class="string"><span class="content">vault.azure.net</span></span>
+  <span class="key">tls</span>:
+    <span class="comment"># ... client trust configuration for Azure Key Vault</span>
+  <span class="key">managedIdentityCredentials</span>:
+    <span class="key">targetResource</span>: <span class="string"><span class="content">https://vault.azure.net/</span></span></code></pre>
+      </div>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use AzureKeyVault.</p>
+       </li>
+       <li>
+        <p><code>keyVaultName</code> is the name of the key vault the filter uses.</p>
+       </li>
+       <li>
+        <p><code>keyVaultHost</code> is the key vault host name, without the key vault name prefix.</p>
+       </li>
+       <li>
+        <p><code>targetResource</code> is the App ID URI of the resource that the proxy authenticates to (your Azure Key Vault URI).</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A TLS client certificate can be specified using a PKCS#12 or JKS key store file.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example TLS client certificate configuration using a PKCS#12 key store file</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">key</span>:
+  <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/cert/server.p12</span></span>
+  <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+  <span class="key">storePassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/store.password</span></span>
+  <span class="key">keyPassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/key.password</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> specifies PKCS#12 file</p>
+       </li>
+       <li>
+        <p><code>storeType</code> specifies the keystore file type. Supported values include <code>PKCS12</code> and <code>JKS</code>.</p>
+       </li>
+       <li>
+        <p><code>storePassword</code> (Optional) specifies a keystore file password.</p>
+       </li>
+       <li>
+        <p><code>keyPassword</code> (Optional) specifies a password for the key entry within the file.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>A set of trust anchors for the TLS client can be specified using a PKCS#12 or JKS key store file.</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">Example TLS client trust change configuration using a PKCS#12 key store file</div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">trust</span>:
+  <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/cert/server.p12</span></span>
+  <span class="key">storeType</span>: <span class="string"><span class="content">PKCS12</span></span>
+  <span class="key">storePassword</span>:
+    <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/cert/store.password</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>storeFile</code> specifies PKCS#12 file</p>
+       </li>
+       <li>
+        <p><code>storeType</code> specifies the keystore file type. Supported values include <code>PKCS12</code> and <code>JKS</code>.</p>
+       </li>
+       <li>
+        <p><code>storePassword</code> (Optional) specifies a keystore file password.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-fortanix-dsm-plugin-configuration-record-encryption">3.4. Fortanix DSM plugin configuration</h3>
+     <div class="paragraph _abstract">
+      <p>For Fortanix DSM, the KMS configuration looks like this. Use the API key and Fortanix DSM Cluster URL values from the KMS setup.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">FortanixDsmKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">&lt;Fortanix DSM Cluster URL&gt;</span></span>
+  <span class="key">apiKeySessionProvider</span>:
+    <span class="key">apiKey</span>:
+      <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/fortanix-dsm/api-key</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>kms</code> specifies the name of the KMS provider. Use <code>FortanixDsmKmsService</code>.</p>
+       </li>
+       <li>
+        <p><code>endpointUrl</code> provides the <a href="#con-fortanix-dsm-setup-record-encryption">Fortanix DSM Cluster URL</a> including the protocol part, such as <code>https:</code> or <code>http:</code>.</p>
+       </li>
+       <li>
+        <p><code>passwordFile</code> references a file containing the API key.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-thales-ctm-plugin-configuration-record-encryption">3.5. Thales CipherTrust Manager plugin configuration</h3>
+     <div class="paragraph _abstract">
+      <p>For Thales CipherTrust Manager, the KMS configuration depends on the authentication method you chose during setup.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="client_certificate_authentication_2">3.5.1. Client certificate authentication</h4>
+      <div class="paragraph">
+       <p>For client certificate authentication (recommended for production), use the client ID, certificate, and private key from the KMS setup:</p>
+      </div>
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">CipherTrustKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://ctm.example.com</span></span>
+  <span class="key">clientCredentials</span>:
+    <span class="key">clientId</span>: <span class="string"><span class="content">&lt;client-id&gt;</span></span>
+  <span class="key">tls</span>:
+    <span class="key">key</span>:
+      <span class="key">privateKeyFile</span>: <span class="string"><span class="content">/opt/kroxylicious/ctm-client.key</span></span>
+      <span class="key">certificateFile</span>: <span class="string"><span class="content">/opt/kroxylicious/ctm-client.crt</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>kms</code> specifies the name of the KMS provider. Use <code>CipherTrustKmsService</code>.</p>
+        </li>
+        <li>
+         <p><code>endpointUrl</code> provides the CipherTrust Manager endpoint URL including the protocol, such as <code><a href="https://ctm.example.com" class="bare">https://ctm.example.com</a></code>.</p>
+        </li>
+        <li>
+         <p><code>clientId</code> is the client ID returned when you registered the client certificate.</p>
+        </li>
+        <li>
+         <p><code>privateKeyFile</code> references the PEM-encoded private key file for the client certificate.</p>
+        </li>
+        <li>
+         <p><code>certificateFile</code> references the PEM-encoded client certificate file.</p>
+        </li>
+       </ul>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="username_and_password_authentication_2">3.5.2. Username and password authentication</h4>
+      <div class="paragraph">
+       <p>For username and password authentication, use the credentials from the KMS setup:</p>
+      </div>
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">CipherTrustKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://ctm.example.com</span></span>
+  <span class="key">userCredentials</span>:
+    <span class="key">username</span>: <span class="string"><span class="content">kroxylicious-service</span></span>
+    <span class="key">password</span>:
+      <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/kroxylicious/ctm-password</span></span>
+    <span class="key">domain</span>: <span class="string"><span class="content">my-domain </span></span><i class="conum" data-value="1"></i><b>(1)</b></code></pre>
+       </div>
+      </div>
+      <div class="colist arabic">
+       <table>
+        <tbody>
+         <tr>
+          <td><i class="conum" data-value="1"></i><b>1</b></td>
+          <td>Optional. Omit if domains are not in use.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>kms</code> specifies the name of the KMS provider. Use <code>CipherTrustKmsService</code>.</p>
+        </li>
+        <li>
+         <p><code>endpointUrl</code> provides the CipherTrust Manager endpoint URL including the protocol, such as <code><a href="https://ctm.example.com" class="bare">https://ctm.example.com</a></code>.</p>
+        </li>
+        <li>
+         <p><code>username</code> is the CipherTrust Manager username.</p>
+        </li>
+        <li>
+         <p><code>passwordFile</code> references a file containing the password.</p>
+        </li>
+        <li>
+         <p><code>domain</code> (optional) is the CipherTrust Manager domain to authenticate into. CipherTrust Manager domains provide multi-tenancy by segregating keys between teams or applications. When omitted, authentication targets the root domain.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">In production deployments, always use <code>passwordFile</code> to reference a password stored in a file rather than embedding the password directly in the configuration.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="optional_tls_trust_configuration">3.5.3. Optional TLS trust configuration</h4>
+      <div class="paragraph">
+       <p>If your CipherTrust Manager instance uses a certificate signed by an internal CA or a self-signed certificate, you can configure a custom trust store:</p>
+      </div>
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">CipherTrustKmsService</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="key">endpointUrl</span>: <span class="string"><span class="content">https://ctm.example.com</span></span>
+  <span class="key">clientCredentials</span>:
+    <span class="key">clientId</span>: <span class="string"><span class="content">&lt;client-id&gt;</span></span>
+  <span class="key">tls</span>:
+    <span class="key">key</span>:
+      <span class="key">privateKeyFile</span>: <span class="string"><span class="content">/opt/kroxylicious/ctm-client.key</span></span>
+      <span class="key">certificateFile</span>: <span class="string"><span class="content">/opt/kroxylicious/ctm-client.crt</span></span>
+    <span class="key">trust</span>:
+      <span class="key">storeFile</span>: <span class="string"><span class="content">/opt/kroxylicious/ctm-server-ca.pem</span></span>
+      <span class="key">storeType</span>: <span class="string"><span class="content">PEM</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>where:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><code>storeFile</code> references a PEM-encoded CA certificate file, or a Java trust store (JKS or PKCS12 format).</p>
+        </li>
+        <li>
+         <p><code>storeType</code> specifies the trust store format (<code>PEM</code>, <code>PKCS12</code>, or <code>JKS</code>).</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>If the <code>tls.trust</code> configuration is omitted, the filter uses the Java default trust store, which includes well-known certificate authorities.</p>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-record-encryption-filter-config-record-encryption">3.6. Filter configuration</h3>
+     <div class="paragraph _abstract">
+      <p>This procedure describes how to configure the Record Encryption filter. Provide the filter configuration and the Key Encryption Key (KEK) selector to use. The KEK selector maps topic name to key names. The filter looks up the resulting key name in the KMS.</p>
+     </div>
+     <div class="ulist">
+      <div class="title">Prerequisites</div>
+      <ul>
+       <li>
+        <p>An instance of Kroxylicious.
+         <br>
+         For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+       </li>
+       <li>
+        <p>A KMS is installed and set up for the filter with KEKs to encrypt records set up for topics.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="olist arabic">
+      <div class="title">Procedure</div>
+      <ol class="arabic">
+       <li>
+        <p>Configure a <code>RecordEncryption</code> type filter.</p>
+        <div class="listingblock">
+         <div class="title">Example Record Encryption filter configuration</div>
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kms</span>: <span class="string"><span class="content">&lt;kms_service_name&gt;</span></span>
+<span class="key">kmsConfig</span>:
+  <span class="error">&lt;kms_specific_config&gt;</span>
+  <span class="comment"># ...</span>
+<span class="key">selector</span>: <span class="string"><span class="content">&lt;KEK-selector_service_name&gt;</span></span>
+<span class="key">selectorConfig</span>:
+  <span class="key">template</span>: <span class="string"><span class="delimiter">"</span><span class="content">KEK-$(topicName)</span><span class="delimiter">"</span></span>
+<span class="key">unresolvedKeyPolicy</span>: <span class="string"><span class="content">PASSTHROUGH_UNENCRYPTED</span></span>
+<span class="key">experimental</span>:
+  <span class="key">encryptionDekRefreshAfterWriteSeconds</span>: <span class="string"><span class="content">3600</span></span>
+  <span class="key">encryptionDekExpireAfterWriteSeconds</span>: <span class="string"><span class="content">7200</span></span>
+  <span class="key">maxEncryptionsPerDek</span>: <span class="string"><span class="content">5000000</span></span></code></pre>
+         </div>
+        </div>
+        <div class="paragraph">
+         <p>where:</p>
+        </div>
+        <div class="ulist">
+         <ul>
+          <li>
+           <p><code>kms</code> specifies the KMS service name.</p>
+          </li>
+          <li>
+           <p><code>kmsConfig</code> specifies configuration specific to the KMS provider.</p>
+          </li>
+          <li>
+           <p><code>selector</code> specifies the Key Encryption Key (KEK) selector to use. The <code>$(topicName)</code> is a literal understood by the proxy. For example, if using the <code>TemplateKekSelector</code> with the template <code>KEK-$(topicName)</code>, create a key for every topic that is to be encrypted with the key name matching the topic name, prefixed by the string <code>KEK-</code>.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>template</code> specifies the template for deriving the KEK, based on a specific topic name.</p>
+             </li>
+            </ul>
+           </div>
+          </li>
+          <li>
+           <p><code>unresolvedKeyPolicy</code> specifies policy governing the behaviour when the KMS does not contain a key. The default is <code>PASSTHROUGH_UNENCRYPTED</code> which causes the record to be forwarded, unencrypted, to the target cluster. Users can alternatively specify <code>REJECT</code> which will cause the entire produce request to be rejected. If all traffic sent to the virtual cluster must be encrypted, this is a safer alternative because unencrypted data is never forwarded.</p>
+          </li>
+          <li>
+           <p><code>experimental</code> defines experimental configuration settings.</p>
+           <div class="ulist">
+            <ul>
+             <li>
+              <p><code>encryptionDekRefreshAfterWriteSeconds</code> specifies how long after creation of a DEK before it becomes eligible for rotation. On the <strong>next</strong> encryption request, the cache asynchronously creates a new DEK. Encryption requests continue to use the old DEK until the new DEK is ready.</p>
+             </li>
+             <li>
+              <p><code>encryptionDekExpireAfterWriteSeconds</code> specifies how long after creation of a DEK until it is removed from the cache. This setting puts an upper bound on how long a DEK can remain cached.</p>
+             </li>
+             <li>
+              <p><code>maxEncryptionsPerDek</code> specifies the maximum number of records any DEK can encrypt. After this limit is reached, that DEK is destroyed and a new DEK is created.</p>
+              <div class="paragraph">
+               <p><code>encryptionDekRefreshAfterWriteSeconds</code> and <code>encryptionDekExpireAfterWriteSeconds</code> properties govern the <em>originator usage period</em> of the DEK, which is the amount of time the DEK remains valid for encrypting records. Shortening this period helps limit the impact if the DEK key material is leaked. However, shorter periods increase the number of KMS API calls, which might affect produce and consume latency and raise KMS provider costs.</p>
+              </div>
+              <div class="paragraph">
+               <p><code>maxEncryptionsPerDek</code> helps prevent key exhaustion by placing an upper limit of the amount of times that a DEK may be used to encrypt records.</p>
+              </div>
+             </li>
+            </ul>
+           </div>
+          </li>
+         </ul>
+        </div>
+       </li>
+       <li>
+        <p>Verify that the encryption has been applied to the specified topics by producing messages through the proxy and then consuming directly and indirectly from the Kafka cluster.</p>
+       </li>
+      </ol>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">If the filter is unable to find the key in the KMS, the filter passes through the records belonging to that topic in the produce request without encrypting them.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-record-encryption">3.7. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the filter configuration in the <code>filterDefinitions</code> list of your proxy configuration. Here’s a complete example of a <code>filterDefinitions</code> entry configured for record encryption with Vault KMS:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>filterDefinitions</code> configuration
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-encryption-filter</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">RecordEncryption</span></span>
+    <span class="key">config</span>:
+      <span class="key">kms</span>: <span class="string"><span class="content">VaultKmsService</span></span>
+      <span class="key">kmsConfig</span>:
+        <span class="key">vaultTransitEngineUrl</span>: <span class="comment"># ...</span>
+        <span class="key">tls</span>: <span class="comment"># ...</span>
+        <span class="key">vaultToken</span>:
+          <span class="key">passwordFile</span>: <span class="string"><span class="content">/opt/vault/token</span></span>
+      <span class="key">selector</span>: <span class="string"><span class="content">TemplateKekSelector</span></span>
+      <span class="key">selectorConfig</span>:
+        <span class="key">template</span>: <span class="string"><span class="delimiter">"</span><span class="content">KEK-$(topicName)</span><span class="delimiter">"</span></span>
+      <span class="key">unresolvedKeyPolicy</span>: <span class="string"><span class="content">PASSTHROUGH_UNENCRYPTED</span></span>
+      <span class="key">experimental</span>:
+        <span class="key">encryptionDekRefreshAfterWriteSeconds</span>: <span class="string"><span class="content">3600</span></span>
+        <span class="key">encryptionDekExpireAfterWriteSeconds</span>: <span class="string"><span class="content">7200</span></span>
+        <span class="key">maxEncryptionsPerDek</span>: <span class="string"><span class="content">5000000</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-record-encryption">3.8. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for record encryption with Vault KMS:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>KafkaProtocolFilter</code> resource
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-encryption-filter</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">RecordEncryption</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">kms</span>: <span class="string"><span class="content">VaultKmsService</span></span>
+    <span class="key">kmsConfig</span>:
+      <span class="key">vaultTransitEngineUrl</span>: <span class="comment"># ...</span>
+      <span class="key">tls</span>: <span class="comment"># ...</span>
+      <span class="key">vaultToken</span>:
+        <span class="key">passwordFile</span>: <span class="string"><span class="content">${secret:encryption-filter:vault-token}</span></span>
+    <span class="key">selector</span>: <span class="string"><span class="content">TemplateKekSelector</span></span>
+    <span class="key">selectorConfig</span>:
+      <span class="key">template</span>: <span class="string"><span class="delimiter">"</span><span class="content">KEK-$(topicName)</span><span class="delimiter">"</span></span>
+    <span class="key">unresolvedKeyPolicy</span>: <span class="string"><span class="content">PASSTHROUGH_UNENCRYPTED</span></span>
+    <span class="key">experimental</span>:
+      <span class="key">encryptionDekRefreshAfterWriteSeconds</span>: <span class="string"><span class="content">3600</span></span>
+      <span class="key">encryptionDekExpireAfterWriteSeconds</span>: <span class="string"><span class="content">7200</span></span>
+      <span class="key">maxEncryptionsPerDek</span>: <span class="string"><span class="content">5000000</span></span></code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a> for more information about configuration on Kubernetes.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-kms-key-creation-record-encryption">4. Creating Keys</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section assumes that you already have a supported KMS instance up and running and have configured the Record Encryption filter. It describes how to create KMS keys for encrypting records sent to topics.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-key-creation-hashicorp-vault-record-encryption">4.1. Creating keys in HashiCorp Vault</h3>
+     <div class="paragraph _abstract">
+      <p>To create a key in HashiCorp Vault for use with the Record Encryption filter, use the following procedure.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-vault-key-creation-record-encryption">4.1.1. Creating HashiCorp Vault keys</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to create AES-256 symmetric keys for use with the Record Encryption filter. The procedure establishes a naming convention for keys, then uses the HashiCorp CLI to create a key with an optional rotation policy.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Access to the HashiCorp Vault CLI with permissions to create keys.</p>
+        </li>
+        <li>
+         <p>Familiarity with basic HashiCorp Vault Transit Engine key management operations.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Establish a naming convention for keys to ensure that the filter’s keys remain separate from those used by other systems.</p>
+         <div class="paragraph">
+          <p>In this example, a <code>KEK-</code> prefix is used for filter key names. Adjust the naming convention as needed.</p>
+         </div>
+        </li>
+        <li>
+         <p>Create a symmetric key:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">vault write -f transit/keys/KEK-trades type=aes256-gcm96 auto_rotate_period=90d</code></pre>
+          </div>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>The key type must be <code>aes256-gcm96</code>, which is the default type for the Transit Engine.</p>
+           </li>
+           <li>
+            <p>(Optional) The <code>auto_rotate_period</code> parameter enables automatic 90-day key rotation. Adjust the rotation period if required.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ol>
+      </div>
+      <div class="admonitionblock tip">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-tip" title="Tip"></i></td>
+          <td class="content">It is recommended to use a key rotation policy.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-key-creation-aws-kms-record-encryption">4.2. Creating keys in AWS KMS</h3>
+     <div class="paragraph _abstract">
+      <p>To create a key in AWS Key Management Service for use with the Record Encryption filter, use the following procedure.</p>
+     </div>
+     <div class="paragraph">
+      <p>You’ll need a privileged AWS user that is capable of creating keys.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-aws-kms-key-creation-record-encryption">4.2.1. Creating AWS KMS keys</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to create a <strong>Symmetric key</strong> with <strong>encrypt and decrypt</strong> usage for the Record Encryption filter. The procedure uses the AWS CLI to create a key and, optionally, apply a rotation policy.</p>
+      </div>
+      <div class="admonitionblock note">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+          <td class="content">Multi-region keys are supported.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Access to the AWS CLI with sufficient permissions to create and manage keys.</p>
+        </li>
+        <li>
+         <p><a href="#con-aws-kms-setup-policy-record-encryption">An alias-based policy for KEK aliases</a>.</p>
+        </li>
+        <li>
+         <p>Familiarity with basic AWS KMS operations.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Create a key and apply the alias:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">KEY_ALIAS="KEK-&lt;name&gt;"
+KEY_ID=$(aws kms create-key | jq -r '.KeyMetadata.KeyId')
+# the create key command will produce JSON output including the KeyId
+aws kms create-alias --alias-name alias/${KEY_ALIAS} --target-key-id ${KEY_ID}</code></pre>
+          </div>
+         </div>
+         <div class="admonitionblock note">
+          <table>
+           <tbody>
+            <tr>
+             <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+             <td class="content">You cannot use keys from other AWS accounts. For more information on this limitation, see the issue for <a href="https://github.com/kroxylicious/kroxylicious/issues/1217" target="_blank" rel="noopener">AWS KMS serde improvements</a>.</td>
+            </tr>
+           </tbody>
+          </table>
+         </div>
+        </li>
+        <li>
+         <p>(Optional) Enable a key rotation policy:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">aws kms enable-key-rotation --key-id ${KEY_ID} --rotation-period-in-days 180</code></pre>
+          </div>
+         </div>
+         <div class="admonitionblock tip">
+          <table>
+           <tbody>
+            <tr>
+             <td class="icon"><i class="fa icon-tip" title="Tip"></i></td>
+             <td class="content">It is recommended to use a key rotation policy.</td>
+            </tr>
+           </tbody>
+          </table>
+         </div>
+        </li>
+       </ol>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-key-creation-azure-key-vault-record-encryption">4.3. Creating keys in Azure Key Vault</h3>
+     <div class="paragraph _abstract">
+      <p>To create a key in Azure Key Vault for use with the Record Encryption filter, use the following procedure.</p>
+     </div>
+     <div class="paragraph">
+      <p>You’ll need a privileged Azure user that is capable of creating key resources to perform the set-up.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-azure-key-vault-key-creation-record-encryption">4.3.1. Creating Azure Key Vault keys</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to create a <code>key</code> with <code>wrapKey</code> and <code>unwrapKey</code> operations enabled for use with the Record Encryption filter. The procedure uses the Azure CLI to create a key and, optionally, apply a rotation policy.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Access to the Azure CLI.</p>
+        </li>
+        <li>
+         <p>A user with the <em>Key Vault Crypto Officer</em> role or equivalent RBAC permissions to manage keys in Azure Key Vault.</p>
+        </li>
+        <li>
+         <p>Familiarity with basic Azure Key Vault key management operations.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Establish a naming convention for keys within key vault for easy identification and use with the Record Encryption filter. Use separate key vaults per application, environment, and region. This ensures separation between the filter’s keys and those used by other systems.</p>
+        </li>
+        <li>
+         <p>Select a key type.</p>
+         <div class="admonitionblock note">
+          <table>
+           <tbody>
+            <tr>
+             <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+             <td class="content">Available key types depend on your Azure Key Vault service tier. See the Azure Key Vault documentation for background information on key types.</td>
+            </tr>
+           </tbody>
+          </table>
+         </div>
+         <div class="paragraph">
+          <p>The filter accepts the following key types and their associated wrapping algorithms:</p>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p><strong>Symmetric Keys (<code>oct</code> or <code>oct-HSM</code>):</strong> Uses the quantum-resistant <code>A256GCM</code> (256-bit AES GCM) wrapping algorithm, which requires a Managed HSM subscription.</p>
+           </li>
+           <li>
+            <p><strong>Asymmetric Keys (<code>RSA</code> or <code>RSA-HSM</code>):</strong> Uses the <code>RSA-OAEP-256</code> (RSAES-OAEP with SHA-256 hash and MGF1/SHA-256 mask) wrapping algorithm, which is not quantum-resistant. This wrapping algorithm does not require a Managed HSM subscription to use (however, <code>RSA-HSM</code> is not available without a premium Azure Key Vault subscription).</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>Create a key with the Azure CLI:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">KEY_VAULT_NAME="kroxylicious-key-vault"
+KEY_NAME="KEK-&lt;name&gt;"
+KEY_TYPE="rsa"
+az keyvault key create --vault-name ${KEY_VAULT_NAME} --name ${KEY_NAME} --kty ${KEY_TYPE} --ops wrapKey unwrapKey</code></pre>
+          </div>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>Change <code>KEY_TYPE</code> if you want to use a key type other than RSA.</p>
+           </li>
+           <li>
+            <p>The <code>wrapKey</code> and <code>unwrapKey</code> operations must be enabled.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>(Optional) Enable a key rotation policy.</p>
+         <div class="olist loweralpha">
+          <ol class="loweralpha" type="a">
+           <li>
+            <p>Save your policy to a JSON file. You can refer to an example policy in the Azure CLI documentation.</p>
+           </li>
+           <li>
+            <p>Apply the rotation policy:</p>
+            <div class="listingblock">
+             <div class="content">
+              <pre class="CodeRay highlight"><code data-lang="shell">az keyvault key rotation-policy update --vault-name ${VAULT_NAME} --name ${KEY_NAME} --value path/to/my_policy.json</code></pre>
+             </div>
+            </div>
+            <div class="admonitionblock tip">
+             <table>
+              <tbody>
+               <tr>
+                <td class="icon"><i class="fa icon-tip" title="Tip"></i></td>
+                <td class="content">It is recommended to use a key rotation policy.</td>
+               </tr>
+              </tbody>
+             </table>
+            </div>
+           </li>
+          </ol>
+         </div>
+        </li>
+       </ol>
+      </div>
+      <div class="ulist _additional-resources">
+       <div class="title">Additional resources</div>
+       <ul>
+        <li>
+         <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/general/overview" target="_blank" rel="noopener">Azure Key Vault overview</a></p>
+        </li>
+        <li>
+         <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices" target="_blank" rel="noopener">Azure Key Vault security best practices</a></p>
+        </li>
+        <li>
+         <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys" target="_blank" rel="noopener">Azure Key Vault keys</a></p>
+        </li>
+        <li>
+         <p><a href="https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-access-policy" target="_blank" rel="noopener">Azure Key Vault access control using RBAC</a></p>
+        </li>
+        <li>
+         <p><a href="https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview" target="_blank" rel="noopener">Azure role-based access control scopes</a></p>
+        </li>
+       </ul>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-key-creation-fortanix-dsm-record-encryption">4.4. Creating keys in Fortanix Data Security Manager (DSM)</h3>
+     <div class="paragraph _abstract">
+      <p>To create a key in Fortanix Data Security Manager (DSM) for use with the Record Encryption filter, use the following procedure.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-fortanix-dsm-key-creation-record-encryption">4.4.1. Creating Fortanix DSM keys</h4>
+      <div class="paragraph _abstract">
+       <p>This procedure describes how to create AES-256 symmetric keys for use with the Record Encryption filter. The procedure uses the Fortanix DSM CLI to create a key according to your naming convention and assign it to the required group.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Access to the Fortanix DSM CLI with sufficient permissions to create keys and list groups.</p>
+        </li>
+        <li>
+         <p>The ID of the Fortanix DSM group that will contain the keys.</p>
+        </li>
+        <li>
+         <p>Familiarity with basic Fortanix DSM key management operations.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Identify the ID of the group to contain the keys:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">GROUP_ID=$(sdkms-cli  --api-endpoint https://&lt;region&gt;.smartkey.io list-groups | grep topic-keks | awk '{print $1}')</code></pre>
+          </div>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>This example extracts the ID of the group named <code>topic-keks</code>.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>Create a key and associate it with the group:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">KEY_NAME="KEK-&lt;name&gt;"
+sdkms-cli  --api-endpoint https://&lt;region&gt;.smartkey.io create-key --obj-type AES --key-size 256 --group-id ${GROUP_ID} --name ${KEY_NAME} --key-ops ENCRYPT,DECRYPT,APPMANAGEABLE</code></pre>
+          </div>
+         </div>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>Specify the key operations as <code>ENCRYPT,DECRYPT,APPMANAGEABLE</code>. These are the minimal permissions required for record encryption to function.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+        <li>
+         <p>(Optional) Enable a key rotation policy. Details can be found in the Fortanix DSM documentation.</p>
+        </li>
+       </ol>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="assembly-key-creation-thales-ctm-record-encryption">4.5. Creating keys in Thales CipherTrust Manager</h3>
+     <div class="paragraph _abstract">
+      <p>To create AES-256 symmetric encryption keys in Thales CipherTrust Manager for the Record Encryption filter, use the ksctl command-line tool.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="proc-thales-ctm-key-creation-record-encryption">4.5.1. Creating keys in Thales CipherTrust Manager</h4>
+      <div class="paragraph _abstract">
+       <p>Create AES-256 symmetric encryption keys in CipherTrust Manager for use as KEKs (Key Encryption Keys) with the Record Encryption filter.</p>
+      </div>
+      <div class="ulist">
+       <div class="title">Prerequisites</div>
+       <ul>
+        <li>
+         <p>Access to the CipherTrust Manager administrative interface</p>
+        </li>
+        <li>
+         <p>The <code>ksctl</code> command-line tool installed and configured</p>
+        </li>
+        <li>
+         <p>Administrator permissions to create keys in CipherTrust Manager</p>
+        </li>
+       </ul>
+      </div>
+      <div class="olist arabic">
+       <div class="title">Procedure</div>
+       <ol class="arabic">
+        <li>
+         <p>Create an AES-256 symmetric key with a name that follows your naming convention:</p>
+         <div class="listingblock">
+          <div class="content">
+           <pre class="CodeRay highlight"><code data-lang="shell">ksctl keys create \
+  --name KEK-production-topic \
+  --algorithm aes \
+  --size 256</code></pre>
+          </div>
+         </div>
+        </li>
+        <li>
+         <p>Record the key name to use in the Record Encryption filter configuration.</p>
+        </li>
+        <li>
+         <p>Repeat for each topic or encryption scope that requires a separate key.</p>
+        </li>
+       </ol>
+      </div>
+      <div class="admonitionblock note">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+          <td class="content">We recommend using a naming convention such as a <code>KEK-</code> prefix to identify keys intended for Kroxylicious. This makes it clear which keys are used for envelope encryption and allows you to configure CTM policies to restrict access to these keys.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-monitoring-record-encryption-filter-record-encryption">5. Monitoring the Record Encryption filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section describes how to monitor the Record Encryption filter.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="con-metrics-record-encryption">5.1. Record Encryption filter metrics</h3>
+     <div class="paragraph _abstract">
+      <p>The filter emits metrics that provide insights into its interactions with the configured KMS. They indicate the load the filter places on the KMS infrastructure and how often its interactions with the KMS fail.</p>
+     </div>
+     <div class="paragraph">
+      <p>The filter emits metrics that count the number of records that are being encrypted. This can help you verify that the filter is configured properly and encrypting specific topics as intended.</p>
+     </div>
+     <div class="paragraph">
+      <p>These metrics are made available automatically once metrics are enabled in the proxy.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="kms_metrics">5.1.1. KMS metrics</h4>
+      <div class="paragraph">
+       <p>KMS metrics track and count the following types of interactions:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>Generating DEK pairs</p>
+        </li>
+        <li>
+         <p>Decrypting EDEKs</p>
+        </li>
+        <li>
+         <p>Resolving KEK aliases</p>
+        </li>
+       </ul>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <caption class="title">Table 1. KMS metrics</caption>
+       <colgroup>
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Metric Name</th>
+         <th class="tableblock halign-left valign-top">Type</th>
+         <th class="tableblock halign-left valign-top">Labels</th>
+         <th class="tableblock halign-left valign-top">Description</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_kms_operation_attempt_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>operation</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Count of the number of KMS operations attempted.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_kms_operation_outcome_total</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>operation</code>, <code>outcome</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Count of the number of KMS operations grouped by outcome.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+      <table class="tableblock frame-all grid-all stretch">
+       <caption class="title">Table 2. Labels used on the KMS metrics</caption>
+       <colgroup>
+        <col style="width: 33.3333%;">
+        <col style="width: 33.3333%;">
+        <col style="width: 33.3334%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Label</th>
+         <th class="tableblock halign-left valign-top">Domain</th>
+         <th class="tableblock halign-left valign-top">Description</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>operation</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>generate_dek_pair</code>, <code>decrypt_edek</code>, <code>resolve_alias</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Type of operation performed.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>outcome</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>SUCCESS</code>, <code>EXCEPTION</code>, <code>NOT_FOUND</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Result of the operation.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="sect3">
+      <h4 id="encryption_accounting_metrics">5.1.2. Encryption accounting metrics</h4>
+      <div class="paragraph">
+       <p>Encryption accounting metrics count the number of records sent to topics that are encrypted and the number of records sent to topics that are not configured for encryption. These metrics are discriminated by topic name. Use these metrics to confirm you configuration is having the effect you desired.</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <caption class="title">Table 3. Encryption accounting metrics</caption>
+       <colgroup>
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+        <col style="width: 25%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Metric Name</th>
+         <th class="tableblock halign-left valign-top">Type</th>
+         <th class="tableblock halign-left valign-top">Labels</th>
+         <th class="tableblock halign-left valign-top">Description</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_filter_record_encryption_encrypted_records</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>topic_name</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Count of the number of records encrypted by the filter.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>kroxylicious_filter_record_encryption_plain_records</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Counter</p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>topic_name</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Count of the number of records <em>not</em> encrypted by the filter.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-operations-record-encryption-filter-record-encryption">6. Operations</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This section documents the operational aspects of using the record encryption filter.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="con-lost-kek-record-encryption">6.1. Handling lost KEKs</h3>
+     <div class="paragraph _abstract">
+      <p>This section describes how to recover or mitigate the loss of a Key Encryption Key (KEK) required for decryption.</p>
+     </div>
+     <div class="paragraph">
+      <p>A KEK is considered lost if it is no longer usable for decryption even though the Key Management System (KMS) remains accessible to the proxy. For example, the key might be scheduled for deletion or in an invalid state.</p>
+     </div>
+     <div class="admonitionblock warning">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+         <td class="content">Do not delete KEKs from your KMS. Determining which KEKs are still required for decryption is complex and error-prone. If a KEK is deleted while encrypted records still depend on it, those records become unrecoverable. As a result, consuming applications will encounter errors and stop processing unless additional action is taken. <strong>Only follow the procedures in this section if absolutely necessary.</strong></td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>When a consumer attempts to fetch a record that cannot be decrypted, the proxy returns an error. The exact error depends on the Kafka client library:</p>
+     </div>
+     <div class="dlist">
+      <dl>
+       <dt class="hdlist1">Apache Kafka client</dt>
+       <dd>
+        <p><code>Unexpected error code 91 while fetching at offset n from topic-partition &lt;topic&gt;-&lt;partition&gt;</code></p>
+       </dd>
+       <dt class="hdlist1">librdkafka-based client</dt>
+       <dd>
+        <p><code>Fetch from broker 0 failed at offset n (leader epoch 0): Broker: Request illegally referred to resource that does not exist</code></p>
+       </dd>
+      </dl>
+     </div>
+     <div class="paragraph">
+      <p>These errors indicate that the KEK required for decryption is missing. Error code 91 (<code>RESOURCE_NOT_FOUND</code>) is returned by the Record Encryption filter when the KEK is unavailable.</p>
+     </div>
+     <div class="paragraph">
+      <p>To confirm the issue, check the proxy logs for entries like the following:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>Failed to decrypt record in topic-partition &lt;topic&gt;-&lt;partition&gt; owing to key not found condition.
+This will be reported to the client as a RESOURCE_NOT_FOUND(91).
+Client may see a message like 'Unexpected error code 91 while fetching at offset' (java) or 'Request illegally referred to resource that does not exist' (librdkafka).
+Cause message: key 'd691a642-d8b4-4445-b668-d390df7000bb' is not found (AWS error: ErrorResponse{type='KMSInvalidStateException', message='arn:aws:kms:us-east-1:000000000000:key/d691a642-d8b4-4445-b668-d390df7000bb is pending deletion.'}).
+Raise log level to DEBUG to see the stack.</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>If you confirm that a KEK is lost, take one of the following actions:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>Cancel key deletion</p>
+       </li>
+       <li>
+        <p>Restore key from backup</p>
+       </li>
+       <li>
+        <p>Delete or skip affected records</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>The actions are listed in recommended order to help restore record consumption. After applying any of the strategies, restart all proxy instances to resume consuming records.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="cancel_key_deletion">6.1.1. Cancel key deletion</h4>
+      <div class="paragraph">
+       <p>Some KMS providers schedule keys for deletion instead of deleting them immediately. During this time, the key appears unavailable but can still be recovered:</p>
+      </div>
+      <div class="olist arabic">
+       <ol class="arabic">
+        <li>
+         <p>Use your KMS console or API to check if the missing key is scheduled for deletion.</p>
+        </li>
+        <li>
+         <p>If so, cancel the deletion to restore the key.</p>
+        </li>
+       </ol>
+      </div>
+      <div class="paragraph">
+       <p>Refer to the documentation of the KMS for more details.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="restore_key_from_backup">6.1.2. Restore key from backup</h4>
+      <div class="paragraph">
+       <p>If the key was backed up, restore it from the backup:</p>
+      </div>
+      <div class="olist arabic">
+       <ol class="arabic">
+        <li>
+         <p>Use your KMS’s backup and restore tools to recover the KEK.</p>
+        </li>
+        <li>
+         <p>Ensure that you also restore the original key metadata, such as the key identifier. The Record Encryption filter uses the identifier to reference the KEK in cipher text records.</p>
+        </li>
+       </ol>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">Restoring the key material alone does not ensure compatibility with encrypted records. You must also recover related metadata, such as the key identifier, to resume successful decryption.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="delete_or_skip_affected_records">6.1.3. Delete or skip affected records</h4>
+      <div class="paragraph">
+       <p>If the KEK cannot be recovered, you must do one of the following:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p>Delete the encrypted records</p>
+        </li>
+        <li>
+         <p>Advance consumer group offsets to skip the affected records</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>The process is as follows:</p>
+      </div>
+      <div class="olist arabic">
+       <ol class="arabic">
+        <li>
+         <p>Identify the earliest offset after which all records can be successfully decrypted.</p>
+         <div class="paragraph">
+          <p>Proxy instances may not switch to a new KEK at the same time, so records encrypted with different keys might appear together in the log. As a result, there may be no single offset where encryption clearly transitions from one KEK to the next.</p>
+         </div>
+         <div class="paragraph">
+          <p>Use <code>kafka-console-consumer.sh</code> with a binary search approach to find the lowest offset for each affected topic partition where decryption succeeds. Domain-specific knowledge can help narrow the search.</p>
+         </div>
+        </li>
+        <li>
+         <p>Use the new starting offset for each affected topic partition to do one of the following:</p>
+         <div class="ulist">
+          <ul>
+           <li>
+            <p>Delete records using <code>kafka-delete-records.sh</code>
+             <br>
+             This tool deletes all records up to the specified offset, including any that may still be readable.</p>
+           </li>
+           <li>
+            <p>Advance consumer group offsets using <code>kafka-consumer-groups.sh</code>
+             <br>
+             You must reset offsets for <strong>every</strong> consumer group that must skip the records that cannot be decrypted.</p>
+           </li>
+          </ul>
+         </div>
+        </li>
+       </ol>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">7. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="glossary">8. Glossary</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Glossary of terms used in the Record Encryption guide.</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">DEK</dt>
+      <dd>
+       <p>Data Encryption Key, a secret key used to encrypt the kafka records</p>
+      </dd>
+      <dt class="hdlist1">KEK</dt>
+      <dd>
+       <p>Key Encryption Key, a secret key that resides within the boundaries of a KMS.</p>
+      </dd>
+      <dt class="hdlist1">KMS</dt>
+      <dd>
+       <p>Key Management System. A dedicated system for controlling access to cryptographic material, and providing operations which use that material.</p>
+      </dd>
+     </dl>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

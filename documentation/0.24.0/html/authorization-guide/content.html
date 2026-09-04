@@ -1,0 +1,915 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-authorization-guide-authorization" class="discrete">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers using the <strong>Kroxylicious Authorization filter</strong> to enforce authorization rules on client requests before they reach the Kafka brokers. Refer to other Kroxylicious guides for information about running the proxy or for advanced topics such as plugin development.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-authorization-overview-authorization">1. Authorization overview</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>The Authorization filter provides the ability for the proxy to enforce an authorization policy about Kafka resources. These authorization checks are performed in addition to any authorization checks made by the broker itself. For an action to be allowed, both the authorization filter and broker must decide that the action is allowed.</p>
+    </div>
+    <div class="paragraph">
+     <p>In general, the Authorization filter makes access decisions in the same manner as Kafka itself. A client cannot distinguish between authorization enforced on the proxy and authorization enforced on the kafka cluster itself.</p>
+    </div>
+    <div class="paragraph">
+     <p>In order to use the Authorization filter, the proxy must be able to determine the authenticated subject. The authenticated subject is the verified identity of the client, derived from its successful authentication.</p>
+    </div>
+    <div class="ulist">
+     <ul>
+      <li>
+       <p>If your applications use TLS client authentication, configure the <a href="../kroxylicious-proxy/">transport subject builder within the virtual cluster</a> to build a subject based on the client certificate.</p>
+      </li>
+      <li>
+       <p>If your applications use SASL authentication, configure the <a href="../authentication-guide/">SASL inspection filter</a> to build the authenticated subject from the successful SASL exchange between the client and the broker.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-authorization-model-authorization">2. Authorization Model</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>In Kafka, clients perform operations on resources.</p>
+    </div>
+    <div class="paragraph">
+     <p>The following tables list the resource types and the operations that apply to them.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="resource_types_and_operations">2.1. Resource types and operations</h3>
+     <div class="sect3">
+      <h4 id="topic_operations">2.1.1. Topic operations</h4>
+      <div class="paragraph">
+       <p>This table lists the topic operations enforced by the authorization filter:</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <colgroup>
+        <col style="width: 50%;">
+        <col style="width: 50%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Operation</th>
+         <th class="tableblock halign-left valign-top">Typical use case</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>READ</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for a consumer to fetch records.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>WRITE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for a producer to send records.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>CREATE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top" rowspan="3">
+          <p class="tableblock">Required for an admin client to create, delete, or alter topics.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DELETE</code></p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>ALTER</code></p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DESCRIBE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for an admin client to perform describe operations that refer to topic resources.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DESCRIBE_CONFIGS</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for an admin client to perform describe config operations that refer to topic configuration.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>ALTER_CONFIGS</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for an admin client to perform alter config operations that relate to topic configuration.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="sect3">
+      <h4 id="group_operations">2.1.2. Group operations</h4>
+      <div class="paragraph">
+       <p>This table lists the operations enforced by the authorization filter for the group resource type:</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <colgroup>
+        <col style="width: 50%;">
+        <col style="width: 50%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Operations</th>
+         <th class="tableblock halign-left valign-top">Typical use case</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>READ</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for a consumer to join a group.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DELETE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for an admin client to delete a group or offsets within a group.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DESCRIBE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for a consumer and admin client to find and describe a group and its offsets.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DESCRIBE_CONFIGS</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for an admin client to perform describe operations that refer to group configuration.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>ALTER_CONFIGS</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for an admin client to perform operations that alter group configuration.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="sect3">
+      <h4 id="transactional_id_operations">2.1.3. Transactional ID operations</h4>
+      <div class="paragraph">
+       <p>This table lists the operations enforced by the authorization filter for the transactional ID resource type:</p>
+      </div>
+      <table class="tableblock frame-all grid-all stretch">
+       <colgroup>
+        <col style="width: 50%;">
+        <col style="width: 50%;">
+       </colgroup>
+       <thead>
+        <tr>
+         <th class="tableblock halign-left valign-top">Operations</th>
+         <th class="tableblock halign-left valign-top">Typical use case</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>WRITE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for a producer or consumer to participate in a transaction.</p>
+         </td>
+        </tr>
+        <tr>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock"><code>DESCRIBE</code></p>
+         </td>
+         <td class="tableblock halign-left valign-top">
+          <p class="tableblock">Required for a producer, consumer, or admin client to find and describe transactions.</p>
+         </td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="implied_operation_permissions">2.2. Implied operation permissions</h3>
+     <div class="paragraph">
+      <p>In the authorization model, some operations imply permission to perform other operations. This table lists the higher-level operations and the implied lower-level operations they include.</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <colgroup>
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3334%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Resource type</th>
+        <th class="tableblock halign-left valign-top">Operation</th>
+        <th class="tableblock halign-left valign-top">Implied operation</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Topic</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>READ</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Topic</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>WRITE</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Topic</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DELETE</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Topic</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>ALTER</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Topic</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>ALTER_CONFIGS</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE_CONFIGS</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Group</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>READ</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Group</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DELETE</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Group</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>ALTER_CONFIGS</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE_CONFIGS</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>TransactionalId</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>WRITE</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>DESCRIBE</code></p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-authorization-rules-authorization">3. Authorization rules</h2>
+   <div class="sectionbody">
+    <div class="paragraph">
+     <p>The authorization rules define which principals can perform specific operations on specific Kafka resources.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="outline_of_a_rule_file">3.1. Outline of a rule file</h3>
+     <div class="paragraph">
+      <p>The following example shows the overall outline of a rule file. The sections that follow give more details.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>// Comment
+from io.kroxylicious.filter.authorization import TopicResource as Topic;
+
+deny User with name = "alice" to * Topic with name = "payments-received";
+allow User with name = "alice" to * Topic with name like "payments-*";
+
+otherwise deny;</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="comments">3.2. Comments</h3>
+     <div class="paragraph">
+      <p>Both line and block comments are supported. Line comments are preceded by <code>//</code>. Block comments are bracketed by <code>/* …​ */</code> markers. Comments are ignored.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="imports">3.3. Imports</h3>
+     <div class="paragraph">
+      <p>Resource types must be imported before use. This is achieved using a <code>from</code> / <code>import</code> statement.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>from &lt;package&gt; import &lt;element&gt; [as &lt;alias&gt;][,... , &lt;elementn&gt; [as &lt;aliasn&gt;]];</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>&lt;package&gt; is <code>io.kroxylicious.filter.authorization</code></p>
+       </li>
+       <li>
+        <p>&lt;element&gt; is a <code>ResourceType</code> implementation name.</p>
+       </li>
+       <li>
+        <p>&lt;alias&gt; is an optional alias for the resource type.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>The following resource types are available within the <code>io.kroxylicious.filter.authorization</code> package:</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <colgroup>
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3334%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Resource type</th>
+        <th class="tableblock halign-left valign-top">Implementation name</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Topic</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>TopicResource</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Represents Kafka topics.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>Group</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>GroupResource</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Represents Kafka consumer groups.</p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>TransactionalId</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>TransactionalIdResource</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Represents Kafka transactional IDs.</p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+     <div class="paragraph">
+      <p>For example, <code>TopicResource</code> is the implementation that represents Kafka topics. To declare it use a <code>import</code> statement like this.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>from io.kroxylicious.filter.authorization import TopicResource;</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>To declare it with an alias, use an <code>import</code> statement like this:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>from io.kroxylicious.filter.authorization import TopicResource as Topic;</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="rules">3.4. Rules</h3>
+     <div class="paragraph">
+      <p>The basic form of a rule is as follows:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>&lt;allow|deny&gt; User with &lt;user predicate&gt; to &lt;operation&gt; &lt;resource type&gt; with &lt;resource predicate&gt;;</code></pre>
+      </div>
+     </div>
+     <div class="paragraph">
+      <p>where:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>&lt;allow|deny&gt;</code> indicates whether to allow or deny the action.</p>
+       </li>
+       <li>
+        <p><code>&lt;user predicate&gt;</code> matches the user principal performing the action.</p>
+       </li>
+       <li>
+        <p><code>&lt;resource type&gt;</code> identifies the resource type being acted upon. This can either be the name of the resource type name or an alias for it.</p>
+       </li>
+       <li>
+        <p><code>&lt;resource predicate&gt;</code> identifies the resource.</p>
+       </li>
+       <li>
+        <p><code>&lt;operation&gt;</code> identifies the operation(s) to be performed on the resource.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Rules must be ordered so that any <code>deny</code> rules precede the <code>allow</code> rules.</p>
+     </div>
+     <div class="paragraph">
+      <p>When rules are evaluated, they are considered from top to bottom, with the first matching rule taking precedence.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="otherwise_deny">3.5. Otherwise deny</h3>
+     <div class="paragraph">
+      <p>Rules files must end with the statement <code>otherwise deny</code>. This stipulation means that all rules files have deny-by-default semantics.</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>...
+otherwise deny;</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="user_predicates">3.6. User predicates</h3>
+     <div class="paragraph">
+      <p>The following User predicates are supported:</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <colgroup>
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3334%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Predicate</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+        <th class="tableblock halign-left valign-top">Example</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>=</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Equals</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name = "alice"</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>IN</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Set inclusion</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name in {"alice", "bob"}</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>LIKE</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Prefix (note that the wildcard * is only permitted at the end of the prefix.)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name like "bob*"</code></p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="resource_predicates">3.7. Resource Predicates</h3>
+     <div class="paragraph">
+      <p>The following resource predicates are supported:</p>
+     </div>
+     <table class="tableblock frame-all grid-all stretch">
+      <colgroup>
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3333%;">
+       <col style="width: 33.3334%;">
+      </colgroup>
+      <thead>
+       <tr>
+        <th class="tableblock halign-left valign-top">Predicate</th>
+        <th class="tableblock halign-left valign-top">Description</th>
+        <th class="tableblock halign-left valign-top">Example</th>
+       </tr>
+      </thead>
+      <tbody>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>=</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Equality</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name = "mytopic"</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>IN</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Set inclusion</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name in {"topic1", "topic2"}</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>LIKE</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Prefix (wildcard * is permitted only at the end)</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name like "finance*"</code></p>
+        </td>
+       </tr>
+       <tr>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>MATCHING</code></p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock">Regular expression match</p>
+        </td>
+        <td class="tableblock halign-left valign-top">
+         <p class="tableblock"><code>name matching "a+"</code></p>
+        </td>
+       </tr>
+      </tbody>
+     </table>
+    </div>
+    <div class="sect2">
+     <h3 id="operations">3.8. Operations</h3>
+     <div class="paragraph">
+      <p>Operations in rules can be specified in the following ways:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p>As a single operation, for example <code>READ</code></p>
+       </li>
+       <li>
+        <p>As a set of operations, for example <code>{READ, WRITE}</code></p>
+       </li>
+       <li>
+        <p>As a wildcard that matches any operation, for example <code>*</code></p>
+       </li>
+      </ul>
+     </div>
+     <div class="admonitionblock note">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+         <td class="content">The Authorization filter does not support the keyword <code>ALL</code>.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-configuring-authorization-filter-authorization">4. Configuring the Authorization filter</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>This procedure describes how to set up the Authorization filter by configuring it in Kroxylicious.</p>
+    </div>
+    <div class="ulist">
+     <div class="title">Prerequisites</div>
+     <ul>
+      <li>
+       <p>An instance of Kroxylicious. For information on deploying Kroxylicious, see the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> or <a href="../kroxylicious-operator/">Kroxylicious Operator for Kubernetes guide</a>.</p>
+      </li>
+     </ul>
+    </div>
+    <div class="olist arabic">
+     <div class="title">Procedure</div>
+     <ol class="arabic">
+      <li>
+       <p>Configure an <code>Authorization</code> type filter.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-proxy-config-authorization">Example proxy configuration file</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment using a <code>KafkaProtocolFilter</code> resource. See <a href="#con-example-kafkaprotocolfilter-resource-authorization">Example <code>KafkaProtocolFilter</code> resource</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+      <li>
+       <p>Configure the ACL rules.</p>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p>In a standalone proxy deployment. See <a href="#con-example-rules-authorization">Example ACL Rules</a></p>
+         </li>
+         <li>
+          <p>In a Kubernetes deployment use a <code>ConfigMap</code> resource. See <a href="#con-example-rules-configmap-resource-authorization">Example ACL Rules</a></p>
+         </li>
+        </ul>
+       </div>
+      </li>
+     </ol>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-proxy-config-authorization">4.1. Example proxy configuration file</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide the Authorization filter configuration in the <code>filterDefinitions</code> list of your proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>filterDefinitions</code> entry configured for authorization:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>filterDefinitions</code> configuration
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+  - <span class="string"><span class="content">name: my-authorization</span></span>
+    <span class="key">type</span>: <span class="string"><span class="content">Authorization</span></span>
+    <span class="key">config</span>:
+      <span class="key">authorizer</span>: <span class="string"><span class="content">AclAuthorizerService</span></span>
+      <span class="key">authorizerConfig</span>:
+        <span class="key">aclFile</span>: <span class="string"><span class="content">/path/to/to/acl-rules.txt</span></span></code></pre>
+      </div>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>authorizer</code> is the name of the authorizer service implementation. Currently, this must be <code>AclAuthorizerService</code>.</p>
+       </li>
+       <li>
+        <p><code>aclFile</code> is the reference file containing the ACL rules.</p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Refer to the <a href="../kroxylicious-proxy/">Kroxylicious Proxy guide</a> for more information about configuring the proxy.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-kafkaprotocolfilter-resource-authorization">4.2. Example <code>KafkaProtocolFilter</code> resource</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>KafkaProtocolFilter</code> resource to contain the filter configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>KafkaProtocolFilter</code> resource configured for authorization:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">kind</span>: <span class="string"><span class="content">KafkaProtocolFilter</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">my-authorization</span></span>
+<span class="key">spec</span>:
+  <span class="key">type</span>: <span class="string"><span class="content">Authorization</span></span>
+  <span class="key">configTemplate</span>:
+    <span class="key">authorizer</span>: <span class="string"><span class="content">AclAuthorizerService</span></span>
+    <span class="key">authorizerConfig</span>:
+      <span class="key">aclFile</span>: <span class="string"><span class="content">${configmap:acl-rules:acl-rules.txt}</span></span></code></pre>
+      </div>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><code>authorizer</code> is the name of the authorizer service implementation. Currently, this must be <code>AclAuthorizerService</code>.</p>
+       </li>
+       <li>
+        <p><code>aclFile</code> is the reference file containing the ACL rules. You can use an <a href="../kroxylicious-operator/#assembly-operator-secure-proxy-securing">interpolation reference</a> to reference rules stored within a Kubernetes <code>ConfigMap</code> or <code>Secret</code> resource.</p>
+       </li>
+      </ul>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-rules-authorization">4.3. Example ACL Rules</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of the Kroxylicious Proxy runs directly on an operating system, provide a file containing the rules and reference it from the proxy configuration.</p>
+     </div>
+     <div class="paragraph">
+      <p>Save the file with a name of your choice and reference it in the filter configuration. The following example shows an ACL rules file referenced as <code>acl-rules.txt</code>:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>from io.kroxylicious.filter.authorization import TopicResource as Topic, GroupResource as Group, TransactionalIdResource as TransactionalId;
+deny User with name = "alice" to * Topic with name = "payments-received";
+allow User with name = "alice" to * Topic with name like "payments-*";
+allow User with name = "bob" to * Topic with name = "payments-received";
+allow User with name = "bob" to READ Group with name = "payment-consumer-group";
+allow User with name = "alice" to * TransactionalId with name like "alice-transaction-*";
+otherwise deny;</code></pre>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="con-example-rules-configmap-resource-authorization">4.4. Example ACL Rules</h3>
+     <div class="paragraph _abstract">
+      <p>If your instance of Kroxylicious runs on Kubernetes, you must use a <code>ConfigMap</code> resource to contain the ACL rules.</p>
+     </div>
+     <div class="paragraph">
+      <p>Here’s a complete example of a <code>ConfigMap</code> resource configured for authorization:</p>
+     </div>
+     <div class="listingblock">
+      <div class="title">
+       Example <code>ConfigMap</code> resource containing the ACL rules
+      </div>
+      <div class="content">
+       <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">apiVersion</span>: <span class="string"><span class="content">v1</span></span>
+<span class="key">kind</span>: <span class="string"><span class="content">ConfigMap</span></span>
+<span class="key">metadata</span>:
+  <span class="key">name</span>: <span class="string"><span class="content">acl-rules</span></span>
+<span class="key">data</span>:
+  <span class="key">acl-rules.txt</span>: <span class="string"><span class="delimiter">|</span><span class="content">
+    from io.kroxylicious.filter.authorization import TopicResource as Topic, GroupResource as Group, TransactionalIdResource as TransactionalId;
+    deny User with name = "alice" to * Topic with name = "payments-received";
+    allow User with name = "alice" to * Topic with name like "payments-*";
+    allow User with name = "bob" to * Topic with name = "payments-received";
+    allow User with name = "bob" to READ Group with name = "payment-consumer-group";
+    allow User with name = "alice" to * TransactionalId with name like "alice-transaction-*";
+    otherwise deny;</span></span></code></pre>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">5. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="glossary">6. Glossary</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Glossary of terms used in the Authorization guide.</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">Subject</dt>
+      <dd>
+       <p>The identity of the client for the purposes of applying policies within the proxy. Whether this is the same as the broker’s notion of subject depends on how authentication is configured in the proxy.</p>
+      </dd>
+      <dt class="hdlist1">Principal</dt>
+      <dd>
+       <p>A component of a subject.</p>
+      </dd>
+      <dt class="hdlist1">Resource</dt>
+      <dd>
+       <p>An entity which an authorizer can control access to. Resources are identified by a type and a name. Examples include Kafka topics and consumer groups (where the group ID is treated as the resource name).</p>
+      </dd>
+      <dt class="hdlist1">Operations</dt>
+      <dd>
+       <p>The things that can be done to resources of a particular type. For example, a Kafka topic resource has operations which include describe, read and write.</p>
+      </dd>
+      <dt class="hdlist1">Action</dt>
+      <dd>
+       <p>A resource and an operation such as <code>read the topic called invoices</code>.</p>
+      </dd>
+      <dt class="hdlist1">Authorizer</dt>
+      <dd>
+       <p>A component that makes an authorization decision, usually based on some kind of access policy.</p>
+      </dd>
+      <dt class="hdlist1">Decision</dt>
+      <dd>
+       <p>The outcome of the authorization of a particular action. This is either <code>allow</code> or <code>deny</code>.</p>
+      </dd>
+     </dl>
+    </div>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

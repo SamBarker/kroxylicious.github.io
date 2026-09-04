@@ -1,0 +1,52 @@
+{% raw %}
+<div id="toc" class="toc">
+ <ul class="sectlevel1">
+  <li><a href="#assembly-operator-overview-operator">1. Kroxylicious Operator overview</a></li>
+  <li><a href="#assembly-operator-api-operator">2. API concepts</a>
+   <ul class="sectlevel2">
+    <li><a href="#api_resources_used_by_the_kroxylicious_proxy">2.1. API resources used by the Kroxylicious Proxy</a></li>
+    <li><a href="#con-api-compatibility-operator-operator">2.2. Custom resource API compatibility</a></li>
+   </ul></li>
+  <li><a href="#assembly-operator-install-operator">3. Installing the Kroxylicious Operator</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-install-prereqs-operator">3.1. Install prerequisites</a></li>
+    <li><a href="#con-install-product-downloads-operator">3.2. Kroxylicious release artifacts</a></li>
+    <li><a href="#proc-install-operator-operator">3.3. Installing the operator using installation files</a></li>
+   </ul></li>
+  <li><a href="#assembly-operator-deploy-a-proxy-operator">4. Deploying a proxy</a>
+   <ul class="sectlevel2">
+    <li><a href="#prerequisites">4.1. Prerequisites</a></li>
+    <li><a href="#the_required_resources">4.2. The required resources</a></li>
+    <li><a href="#assembly-operator-configuring-kafkaprotocolfilters-operator">4.3. Filters</a></li>
+   </ul></li>
+  <li><a href="#assembly-operator-operate-proxy-operator">5. Operating a proxy</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-checking-virtualkafkacluster-status-operator">5.1. Checking the status of the <code>VirtualKafkaCluster</code> resource</a></li>
+    <li><a href="#con-checking-kafkaproxyingress-status-operator">5.2. Checking the status of the <code>KafkaProxyIngress</code> resource</a></li>
+    <li><a href="#con-kafkaproxy-cpu-memory-allocation-operator">5.3. Configuring Proxy container CPU and memory resource limits and requests</a></li>
+    <li><a href="#con-kafkaproxyingress-infrastructure-annotations-operator">5.4. Configuring infrastructure annotations for ingress resources</a></li>
+   </ul></li>
+  <li><a href="#assembly-operator-secure-proxy-securing">6. Securing a proxy</a>
+   <ul class="sectlevel2">
+    <li><a href="#prerequisites_2">6.1. Prerequisites</a></li>
+    <li><a href="#assembly-operator-secure-client-proxy-connection-securing">6.2. Securing the client-to-proxy connection</a></li>
+    <li><a href="#assembly-operator-secure-proxy-broker-connection-securing">6.3. Securing the proxy-to-broker connection</a></li>
+    <li><a href="#assembly-operator-secure-filter-securing">6.4. Securing filters</a></li>
+   </ul></li>
+  <li><a href="#assembly-operator-advanced-proxy-tuning-operator">7. Advanced proxy tuning</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-kafkaproxy-network-settings-operator">7.1. Advanced network tuning for a proxy</a></li>
+    <li><a href="#con-kafkaproxy-idle-timeouts-operator">7.2. Configuring idle connection timeouts</a></li>
+   </ul></li>
+  <li><a href="#assembly-operator-monitoring-operator">8. Monitoring</a>
+   <ul class="sectlevel2">
+    <li><a href="#con-prometheus-metrics-proxy-operator">8.1. Proxy metrics overview</a></li>
+    <li><a href="#con-prometheus-metrics-operator-operator">8.2. Overview of operator metrics</a></li>
+    <li><a href="#con-operator-ingesting-metrics-operator">8.3. Ingesting metrics</a></li>
+    <li><a href="#con-operator-setting-log-levels-operator">8.4. Setting log levels</a></li>
+   </ul></li>
+  <li><a href="#glossary">9. Glossary</a></li>
+  <li><a href="#trademark_notice">10. Trademark notice</a></li>
+ </ul>
+</div>
+{% endraw %}

@@ -1,0 +1,736 @@
+{% raw %}
+<html>
+ <head></head>
+ <body>
+  <div id="preamble">
+   <div class="sectionbody">
+    <h2 id="con-about-developer-guide-proxy" class="discrete _abstract">About this guide</h2>
+    <div class="paragraph _abstract">
+     <p>This guide covers developing plugins for Kroxylicious using the Java programming language. Other guides should be consulted if you want to deploy, configure or secure a Kroxylicious Proxy.</p>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="assembly-proxy-overview-proxy">1. Kroxylicious Proxy overview</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Kroxylicious is an Apache Kafka protocol-aware ("Layer 7") proxy designed to enhance Kafka-based systems. Through its filter mechanism it allows additional behavior to be introduced into a Kafka-based system without requiring changes to either your applications or the Kafka cluster itself. Built-in filters are provided as part of the solution.</p>
+    </div>
+    <div class="paragraph">
+     <p>Functioning as an intermediary, the Kroxylicious mediates communication between a Kafka cluster and its clients. It takes on the responsibility of receiving, filtering, and forwarding messages.</p>
+    </div>
+    <div class="paragraph">
+     <p>A Java API provides a convenient means for implementing custom logic within the proxy.</p>
+    </div>
+    <div class="ulist _additional-resources">
+     <div class="title">Additional resources</div>
+     <ul>
+      <li>
+       <p><a href="https://kafka.apache.org" target="_blank" rel="noopener">Apache Kafka website</a></p>
+      </li>
+     </ul>
+    </div>
+    <div class="sect2">
+     <h3 id="con-api-compatibility-developer-proxy">1.1. Compatibility</h3>
+     <div class="paragraph _abstract">
+      <p>There are effectively two APIs a filter developer needs to care about:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>The Filter API against which the filter is written. This is a contract between the Filter developer and the Kroxylicious runtime. It includes <code>Filter</code>, <code>FilterFactory</code>, which the developer is responsible for implementing, and <code>FilterContext</code> and <code>FilterFactoryContext</code>, which are provided by the Kroxylicous runtime for the developer to use.</p>
+       </li>
+       <li>
+        <p>The "configuration API" that your filter exposes. This is a contract between the Filter developer and Kroxylicious users.</p>
+       </li>
+      </ol>
+     </div>
+     <div class="sect3">
+      <h4 id="compatibility_of_the_filter_api">1.1.1. Compatibility of the Filter API</h4>
+      <div class="paragraph">
+       <p>The Kroxylicious project uses semantic versioning. For the filter API this means that you can compile your filter against the Kroxylicious API at version <em>x.y<sub>c</sub>.z<sub>c</sub></em> and users will be able to use it with Kroxylicious runtimes at version <em>x.y<sub>r</sub>.z<sub>r</sub></em> if the runtime version is not older than the compile time version (that is if <em>y<sub>r</sub></em> ≥ <em>y<sub>c</sub></em> and <em>z<sub>r</sub></em> ≥ <em>z<sub>c</sub></em>).</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="compatibility_of_your_filter_configuration">1.1.2. Compatibility of your Filter configuration</h4>
+      <div class="paragraph">
+       <p>The Kroxylicious Proxy isn’t able to provide or enforce any compatibility guarantees about the configuration API that your plugin offers to users. In other words you are free you release your plugin at version <em>a.b.c</em> and later release a version <em>a.d.e</em> which doesn’t accept the same configuration syntax (JSON or YAML) that the original version did.</p>
+      </div>
+      <div class="paragraph">
+       <p>Doing this makes it more difficult for users to upgrade from older versions on your plugin, because they will have to rewrite and revalidate the configuration which worked with the old version.</p>
+      </div>
+      <div class="paragraph">
+       <p>For this reason filter developers are strongly encouraged to adopt Semantic versioning as the way to communicate compatibility of the configuration API they offer to users.</p>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="con-custom-filters-proxy">2. Custom filters</h2>
+   <div class="sectionbody">
+    <div class="paragraph _abstract">
+     <p>Custom filters can be written in the Java programming language. Kroxylicious supports Java 21. Knowledge of the <a href="https://kafka.apache.org/protocol.html" target="_blank" rel="noopener">Kafka protocol</a> is generally required to write a protocol filter.</p>
+    </div>
+    <div class="paragraph">
+     <p>There is currently one class of Custom Filters users can implement:</p>
+    </div>
+    <div class="dlist">
+     <dl>
+      <dt class="hdlist1">
+       <a href="#protocol_filters">Protocol filters</a>
+      </dt>
+      <dd>
+       <p>Allow customisation of how protocol messages are handled on their way to, or from, the Cluster.</p>
+      </dd>
+     </dl>
+    </div>
+    <div class="paragraph">
+     <p>The following sections explain in more detail how to write your own filters.</p>
+    </div>
+    <div class="sect2">
+     <h3 id="custom_filter_project_generation">2.1. Custom Filter Project Generation</h3>
+     <div class="paragraph">
+      <p>You can generate a standalone filter project. This bootstraps a project to allow you to build your own Custom Filters. You can follow the <a href="../developer-quick-start/">Kroxylicious Developer Quickstart</a> for a hands-on introduction to creating your own custom filters.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="api_docs">2.2. API docs</h3>
+     <div class="paragraph">
+      <p>Custom filters are built by implementing interfaces supplied by the <a href="https://github.com/kroxylicious/kroxylicious/tree/v0.24.0/kroxylicious-api" target="_blank" rel="noopener">kroxylicious-api</a> module (<a href="https://mvnrepository.com/artifact/io.kroxylicious/kroxylicious-api">io.kroxylicious:kroxylicious-api</a> on maven central). You can view the javadoc <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/package-summary.html" target="_blank" rel="noopener">here</a>.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="dependencies">2.3. Dependencies</h3>
+     <div class="paragraph">
+      <p>How filter classes are loaded is not currently defined by the filter contract. In other words, filters might be loaded using a classloader-per-filter model, or using a single class loader. This doesn’t really make a difference to filter authors except where they want to make use of libraries as dependencies. Because those dependencies might be loaded by the same classloader as the dependencies of other filters there is the possibility of collision. Filter A and Filter B might both want to use Library C, and they might want to use different versions of Library C.</p>
+     </div>
+     <div class="paragraph">
+      <p>For common things like logging and metric facade APIs it is recommended to use the facade APIs which are also used by the proxy core.</p>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="protocol_filters">2.4. Protocol filters</h3>
+     <div class="paragraph">
+      <p>A protocol filter is a <code>public</code> top-level, concrete class with a particular public constructor and which implements one or more protocol filter interfaces. You can implement two distinct types of Custom Protocol Filter:</p>
+     </div>
+     <div class="ulist">
+      <ul>
+       <li>
+        <p><a href="#specific_message_protocol_filters">Specific Message Protocol Filters</a></p>
+       </li>
+       <li>
+        <p><a href="#requestresponse_protocol_filters">Request/Response Protocol Filters</a></p>
+       </li>
+      </ul>
+     </div>
+     <div class="paragraph">
+      <p>Note that these types are mutually exclusive, for example a Filter is not allowed to implement both <code>RequestFilter</code> and <code>MetadataRequestFilter</code>. This is to prevent ambiguity. If we received a <code>MetadataRequest</code>, would it be dispatched to the <code>onMetadataRequest(..)</code> method of <code>MetadataRequestFilter</code> or the <code>onRequest</code> method of <code>RequestFilter</code>, or both? Instead, we disallow these combinations, throwing an exception at runtime if your Filter implements incompatible interfaces.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="specific_message_protocol_filters">2.4.1. Specific Message Protocol Filters</h4>
+      <div class="paragraph">
+       <p>A filter may wish to intercept specific types of Kafka messages. For example, intercept all Produce Requests, or intercept all Fetch Responses. To support this case Kroxylicious provides an interfaces for all request types and response types supported by Kafka (at the version of Kafka Kroxylicious depends on). A filter implementation can implement any combination of these interfaces.</p>
+      </div>
+      <div class="paragraph">
+       <p>There is no requirement that a Filter handles both the request and response halves of an RPC. A Filter can choose to intercept only the request, or only the response, or both the request and response.</p>
+      </div>
+      <div class="sect4">
+       <h5 id="examples">Examples</h5>
+       <div class="paragraph">
+        <p>To intercept all Fetch Requests your class would implement <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/FetchRequestFilter.html" target="_blank" rel="noopener">FetchRequestFilter</a>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">FetchRequestClientIdFilter</span> <span class="directive">implements</span> FetchRequestFilter {
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onFetchRequest(<span class="type">short</span> apiVersion,
+                                                               RequestHeaderData header,
+                                                               FetchRequestData request,
+                                                               FilterContext context) {
+        header.setClientId(<span class="string"><span class="delimiter">"</span><span class="content">fetch-client!</span><span class="delimiter">"</span></span>);
+        <span class="keyword">return</span> context.forwardRequest(header, request);
+    }
+}</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>To intercept all Fetch Responses your class would implement <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/FetchResponseFilter.html" target="_blank" rel="noopener">FetchResponseFilter</a>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">FetchRequestClientIdFilter</span> <span class="directive">implements</span> FetchResponseFilter {
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;ResponseFilterResult&gt; onFetchResponse(<span class="type">short</span> apiVersion,
+                                                                 ResponseHeaderData header,
+                                                                 FetchResponseData response,
+                                                                 FilterContext context) {
+        mutateResponse(response);
+        <span class="keyword">return</span> context.forwardResponse(header, response);
+    }
+}</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>To intercept all Fetch Requests and all Fetch Responses your class would implement <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/FetchRequestFilter.html" target="_blank" rel="noopener">FetchRequestFilter</a> and <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/FetchResponseFilter.html" target="_blank" rel="noopener">FetchResponseFilter</a>:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">FetchRequestClientIdFilter</span> <span class="directive">implements</span> FetchRequestFilter, FetchResponseFilter {
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onFetchRequest(<span class="type">short</span> apiVersion,
+                                                               RequestHeaderData header,
+                                                               FetchRequestData request,
+                                                               FilterContext context) {
+        header.setClientId(<span class="string"><span class="delimiter">"</span><span class="content">fetch-client!</span><span class="delimiter">"</span></span>);
+        <span class="keyword">return</span> context.forwardRequest(header, request);
+    }
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;ResponseFilterResult&gt; onFetchResponse(<span class="type">short</span> apiVersion,
+                                                                 ResponseHeaderData header,
+                                                                 FetchResponseData response,
+                                                                 FilterContext context) {
+        mutateResponse(response);
+        <span class="keyword">return</span> context.forwardResponse(header, response);
+    }
+}</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>Specific Message Filter interfaces are mutually exclusive with <a href="#requestresponse_protocol_filters">Request/Response</a>. Kroxylicious will reject invalid combinations of interfaces.</p>
+       </div>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="requestresponse_protocol_filters">2.4.2. Request/Response Protocol Filters</h4>
+      <div class="paragraph">
+       <p>A filter may wish to intercept every message being sent from the Client to the Cluster or from the Cluster to the Client. To do this your custom filter will implement:</p>
+      </div>
+      <div class="ulist">
+       <ul>
+        <li>
+         <p><a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/RequestFilter.html" target="_blank" rel="noopener">RequestFilter</a> to intercept all requests.</p>
+        </li>
+        <li>
+         <p><a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/ResponseFilter.html" target="_blank" rel="noopener">ResponseFilter</a> to intercept all responses.</p>
+        </li>
+       </ul>
+      </div>
+      <div class="paragraph">
+       <p>Custom filters are free to implement either interface or both interfaces to intercept all messages.</p>
+      </div>
+      <div class="paragraph">
+       <p>For example:</p>
+      </div>
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">FixedClientIdFilter</span> <span class="directive">implements</span> RequestFilter {
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onRequest(ApiKeys apiKey,
+                                                          RequestHeaderData header,
+                                                          ApiMessage body,
+                                                          FilterContext filterContext) {
+        header.setClientId(<span class="string"><span class="delimiter">"</span><span class="content">example!</span><span class="delimiter">"</span></span>);
+        <span class="keyword">return</span> filterContext.forwardRequest(header, body);
+    }
+
+}</code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>Request/Response Filter interfaces are mutually exclusive with <a href="#specific_message_protocol_filters">Specific Message</a> interfaces. Kroxylicious will reject invalid combinations of interfaces.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="the_filter_result">2.4.3. The Filter Result</h4>
+      <div class="paragraph">
+       <p>As seen above, filter methods (<code>onXyz[Request|Response]</code>) must return a <code>CompletionStage&lt;FilterResult&gt;</code> object. It is the job of <code>FilterResult</code> to convey what message is to forwarded to the next filter in the chain (or broker /client if at the chain’s beginning or end). It is also used to carry instructions such as indicating that the connection must be closed, or a message dropped.</p>
+      </div>
+      <div class="paragraph">
+       <p>If the filter returns a <code>CompletionStage</code> that is already completed normally, Kroxylicious will immediately perform the action described by the <code>FilterResult</code>.</p>
+      </div>
+      <div class="paragraph">
+       <p>The filter may return a <code>CompletionStage</code> that is not yet completed. When this happens, Kroxylicious will pause reading from the downstream (the Client writes will eventually block), and it begins to queue up in-flight requests/responses arriving at the filter. This is done so that message order is maintained. Once the <code>CompletionStage</code> completes, the action described by the <code>FilterResult</code> is performed, reading from the downstream resumes and any queued up requests/responses are processed.</p>
+      </div>
+      <div class="admonitionblock important">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+          <td class="content">The pausing of reads from the downstream is a relatively costly operation. To maintain optimal performance filter implementations should minimise the occasions on which an incomplete <code>CompletionStage</code> is returned.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>If the <code>CompletionStage</code> completes exceptionally, the connection is closed. This also applies if the <code>CompletionStage</code> does not complete within a timeout (20000 milliseconds).</p>
+      </div>
+      <div class="sect4">
+       <h5 id="creating_a_filter_result">Creating a Filter Result</h5>
+       <div class="paragraph">
+        <p>The <code>FilterContext</code> is the factory for the <code>FilterResult</code> objects.</p>
+       </div>
+       <div class="paragraph">
+        <p>There are two convenience methods<sup class="footnote">[<a id="_footnoteref_1" class="footnote" href="#_footnotedef_1" title="View footnote.">1</a>]</sup> that simply allow a filter to forward a result to the next filter. We’ve already seen these in action above.</p>
+       </div>
+       <div class="ulist">
+        <ul>
+         <li>
+          <p><code>context.forwardRequest(header, request)</code> used by result filter to forward a request.</p>
+         </li>
+         <li>
+          <p><code>context.forwardResponse(header, response)</code> used by result filter to forward a request.</p>
+         </li>
+        </ul>
+       </div>
+       <div class="paragraph">
+        <p>To access richer features, use the filter result builders <code>context.requestFilterResultBuilder()</code> and <code>responseFilterResultBuilder()</code>.</p>
+       </div>
+       <div class="paragraph">
+        <p>Filter result builders allow you to:</p>
+       </div>
+       <div class="olist arabic">
+        <ol class="arabic">
+         <li>
+          <p>forward a request/response: <code>.forward(header, request)</code>.</p>
+         </li>
+         <li>
+          <p>signal that a connection is to be closed: <code>.withCloseConnection()</code>.</p>
+         </li>
+         <li>
+          <p>signal that a message is to be dropped (i.e. not forwarded): <code>.drop()</code>.</p>
+         </li>
+         <li>
+          <p>for requests only, send a short-circuit response: <code>.shortCircuitResponse(header, response)</code></p>
+         </li>
+        </ol>
+       </div>
+       <div class="paragraph">
+        <p>The builder lets you combine legal behaviours together. For instance, to close the connection after forwarding a response to a client, a response filter could use:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="keyword">return</span> context.responseFilterResultBuilder()
+        .forward(header, response)
+        .withCloseConnection()
+        .complete();</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>The builders yield either a completed <code>CompletionStage&lt;FilterResult&gt;</code> which can be returned directly from the filter method, or bare <code>FilterResult</code>. The latter exists to support asynchronous programming styles allowing you to use your own Futures.</p>
+       </div>
+       <div class="admonitionblock important">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-important" title="Important"></i></td>
+           <td class="content">The <code>drop</code> behaviour can be legally used in very specific circumstances. The Kafka Protocol is, for the most part, strictly request/response with responses expected in the order the request were sent. The client will fail if the contract isn’t upheld. The exception is <code>Produce</code> where <code>acks=0</code>. Filters may drop these requests without introducing a protocol error.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="the_protocol_filter_lifecycle">2.4.4. The protocol filter lifecycle</h4>
+      <div class="paragraph">
+       <p>Instances of the filter class are created on demand when a protocol message is first sent by a client. Instances are specific to the channel between a single client and a single broker.</p>
+      </div>
+      <div class="paragraph">
+       <p>It exists while the client remains connected.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="handling_state">2.4.5. Handling state</h4>
+      <div class="paragraph">
+       <p>The simplest way of managing per-client state is to use member fields. The proxy guarantees that all methods of a given filter instance will always be invoked on the same thread (also true of the CompletionStage completion in the case of <a href="#sending_asynchronous_requests_to_the_cluster">Sending asynchronous requests to the Cluster</a>). Therefore, there is no need to use synchronization when accessing such fields.</p>
+      </div>
+      <div class="paragraph">
+       <p>See the <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/package-summary.html#implementing.threadSafety" target="_blank" rel="noopener"><code>io.kroxylicious.proxy.filter</code></a> package javadoc for more information on thread-safety.</p>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="filter_patterns">2.4.6. Filter Patterns</h4>
+      <div class="paragraph">
+       <p>Kroxylicious Protocol Filters support several patterns:</p>
+      </div>
+      <div class="olist arabic">
+       <ol class="arabic">
+        <li>
+         <p><a href="#intercepting_requests_and_responses">Intercepting Requests and Responses</a></p>
+        </li>
+        <li>
+         <p><a href="#sending_response_messages_from_a_request_filter_towards_the_client_short_circuit_responses">Sending Response messages from a Request Filter towards the Client (Short-circuit responses)</a></p>
+        </li>
+        <li>
+         <p><a href="#sending_asynchronous_requests_to_the_cluster">Sending asynchronous requests to the Cluster</a></p>
+        </li>
+        <li>
+         <p><a href="#filtering_specific_api_versions">Filtering specific API Versions</a></p>
+        </li>
+       </ol>
+      </div>
+      <div class="sect4">
+       <h5 id="intercepting_requests_and_responses">Intercepting Requests and Responses</h5>
+       <div class="paragraph">
+        <p>This is a common pattern, we want to inspect or modify a message. For example:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">SampleFetchResponseFilter</span> <span class="directive">implements</span> FetchResponseFilter {
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;ResponseFilterResult&gt; onFetchResponse(<span class="type">short</span> apiVersion,
+                                                                 ResponseHeaderData header,
+                                                                 FetchResponseData response,
+                                                                 FilterContext context) {
+        <span class="comment">// We mutate the response object. For example, you could alter the records that have been fetched.</span>
+        mutateResponse(response, context);
+        <span class="comment">// We forward the response, sending it towards the client, invoking Filters downstream of this one.</span>
+        <span class="keyword">return</span> context.forwardResponse(header, response);
+    }
+}</code></pre>
+        </div>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">We can only forward the response and header objects passed into the <code>onFetchResponse</code>. New instances are not supported.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="sending_response_messages_from_a_request_filter_towards_the_client_short_circuit_responses">Sending Response messages from a Request Filter towards the Client (Short-circuit responses)</h5>
+       <div class="paragraph">
+        <p>In some cases we may wish to not forward a request from the client to the Cluster. Instead, we want to intercept that request and generate a response message in a Kroxylicious Protocol Filter and send it towards the client. This is called a short-circuit response.</p>
+       </div>
+       <div class="imageblock">
+        <div class="content">
+         <img src="../images/filter-short-circuiting.svg" alt="Diagram showing a filter sending its own response rather than proxying the request to the broker">
+        </div>
+        <div class="title">Figure 1. Illustration of responding without proxying</div>
+       </div>
+       <div class="paragraph">
+        <p>For example:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">CreateTopicRejectFilter</span> <span class="directive">implements</span> CreateTopicsRequestFilter {
+
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onCreateTopicsRequest(<span class="type">short</span> apiVersion, RequestHeaderData header, CreateTopicsRequestData request,
+                                                                      FilterContext context) {
+
+        <span class="comment">// Create a new instance of the corresponding response data and populate it. Note you may need to use the `apiVersion` to check which fields can be set at this request's API version.</span>
+        CreateTopicsResponseData response = <span class="keyword">new</span> CreateTopicsResponseData();
+        CreateTopicsResponseData.CreatableTopicResultCollection topics = <span class="keyword">new</span> CreateTopicsResponseData.CreatableTopicResultCollection();
+        request.topics().forEach(creatableTopic -&gt; {
+            CreateTopicsResponseData.CreatableTopicResult result = <span class="keyword">new</span> CreateTopicsResponseData.CreatableTopicResult();
+            result.setErrorCode(Errors.INVALID_TOPIC_EXCEPTION.code()).setErrorMessage(ERROR_MESSAGE);
+            result.setName(creatableTopic.name());
+            topics.add(result);
+        });
+        response.setTopics(topics);
+        <span class="comment">// We generate a short-circuit response that will send it towards the client, invoking Filters downstream of this one.</span>
+        <span class="keyword">return</span> context.requestFilterResultBuilder().shortCircuitResponse(response).completed();
+    }
+}</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>This will respond to all Create Topic requests with an error response without forwarding any of those requests to the Cluster.</p>
+       </div>
+       <div class="sect5">
+        <h6 id="closing_the_connections">Closing the connections</h6>
+        <div class="paragraph">
+         <p>There is a useful variation on the pattern above, where the filter needs, in addition to sending an error response, also to cause the connection to close. This is useful in use-cases where the filter wishes to disallow certain client behaviours.</p>
+        </div>
+        <div class="listingblock">
+         <div class="content">
+          <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">DisallowAlterConfigs</span> <span class="directive">implements</span> AlterConfigsRequestFilter {
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onAlterConfigsRequest(<span class="type">short</span> apiVersion, RequestHeaderData header, AlterConfigsRequestData request,
+                                                                      FilterContext context) {
+        <span class="type">var</span> response = <span class="keyword">new</span> AlterConfigsResponseData();
+        response.setResponses(request.resources().stream()
+                .map(a -&gt; <span class="keyword">new</span> AlterConfigsResourceResponse()
+                        .setErrorCode(Errors.INVALID_CONFIG.code())
+                        .setErrorMessage(<span class="string"><span class="delimiter">"</span><span class="content">This service does not allow this operation - closing connection</span><span class="delimiter">"</span></span>))
+                .toList());
+        <span class="comment">// We enable the close connection option on the builder.  This will cause Kroxylicious to close the connection after the response is sent to the client.</span>
+        <span class="keyword">return</span> context.requestFilterResultBuilder()
+                         .shortCircuitResponse(response)
+                         .withCloseConnection()
+                         .completed();
+    }
+}</code></pre>
+         </div>
+        </div>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="sending_asynchronous_requests_to_the_cluster">Sending asynchronous requests to the Cluster</h5>
+       <div class="paragraph">
+        <p>Filters can make additional asynchronous requests to the Cluster. This is useful if the Filter needs additional information from the Cluster in order to know how to mutate the filtered request/response.</p>
+       </div>
+       <div class="paragraph">
+        <p>The Filter can make use of <a href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/CompletionStage.html" target="_blank" rel="noopener">CompletionStage</a> chaining features ([<code>#thenApply()</code> etc.) to organise for actions to be done once the asynchronous request completes. For example, it could chain an action that mutates the filtered request/response using the asynchronous response, and finally, chain an action to forward the request/response to the next filter.</p>
+       </div>
+       <div class="paragraph">
+        <p>The asynchronous request/response will be intercepted by Filters upstream of this Filter. Filters downstream of this Filter (and the Client) do not see the asynchronous response.</p>
+       </div>
+       <div class="paragraph">
+        <p>Let’s take a look at an example. We’ll send an asynchronous request towards the Cluster for topic metadata while handling a FetchRequest and use the response to mutate the FetchRequest before passing it to the next filter in the chain.</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">FetchFilter</span> <span class="directive">implements</span> FetchRequestFilter {
+    <span class="directive">public</span> <span class="directive">static</span> <span class="directive">final</span> <span class="type">short</span> METADATA_VERSION_SUPPORTING_TOPIC_IDS = (<span class="type">short</span>) <span class="integer">12</span>;
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onFetchRequest(ApiKeys apiKey,
+                                                               RequestHeaderData header,
+                                                               FetchRequestData request,
+                                                               FilterContext context) {
+        <span class="comment">// Create a header with a compatible API version.</span>
+        <span class="comment">// The version must be supported by both the Kafka client used by Kroxylicious and the target cluster.</span>
+        <span class="type">var</span> metadataRequestHeader = <span class="keyword">new</span> RequestHeaderData().setRequestApiVersion(METADATA_VERSION_SUPPORTING_TOPIC_IDS);
+        <span class="comment">// Build a metadata request matching the chosen API version.</span>
+        <span class="comment">// Refer to the {kafka-protocol}[Kafka Protocol Guide] for more details.</span>
+        <span class="type">var</span> metadataRequest = <span class="keyword">new</span> MetadataRequestData();
+        <span class="type">var</span> topic = <span class="keyword">new</span> MetadataRequestData.MetadataRequestTopic();
+        topic.setTopicId(Uuid.randomUuid());
+        metadataRequest.topics().add(topic);
+        <span class="comment">// Send request asynchronously to the cluster and obtain a CompletionStage containing the response.</span>
+        <span class="type">var</span> stage = context.sendRequest(metadataRequestHeader, metadataRequest);
+        <span class="comment">// Use response to mutate the fetch request.</span>
+        <span class="keyword">return</span> stage.thenApply(metadataResponse -&gt; mutateFetchRequest(metadataResponse, request))
+                     <span class="comment">// Forward the mutated request.</span>
+                    .thenCompose(mutatedFetchRequest -&gt; context.forwardRequest(header, mutatedFetchRequest));
+    }
+}</code></pre>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>As you have read above, we need to know the API version we want our request to be encoded at. Your filter can discover what versions of an API the Kafka Cluster supports. To do this use the <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/ApiVersionsService.html" target="_blank" rel="noopener">ApiVersionsService</a> available from the <code>FilterContext</code> to determine programmatically what versions of an API are support and then write code to make a suitable <code>request</code> object.</p>
+       </div>
+       <div class="admonitionblock note">
+        <table>
+         <tbody>
+          <tr>
+           <td class="icon"><i class="fa icon-note" title="Note"></i></td>
+           <td class="content">Kroxylicious provides the guarantee that computation stages chained using the <em>default execution methods</em> are executed on the same thread as the rest of the Filter work, so we can safely mutate Filter members without synchronising. See the <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/package-summary.html#implementing.threadSafety" target="_blank" rel="noopener"><code>io.kroxylicious.proxy.filter</code></a> package javadoc for more information on thread-safety.</td>
+          </tr>
+         </tbody>
+        </table>
+       </div>
+      </div>
+      <div class="sect4">
+       <h5 id="filtering_specific_api_versions">Filtering specific API Versions</h5>
+       <div class="quoteblock">
+        <blockquote>
+         <div class="paragraph">
+          <p>Kafka has a "bidirectional" client compatibility policy. In other words, new clients can talk to old servers, and old clients can talk to new servers. This allows users to upgrade either clients or servers without experiencing any downtime.</p>
+         </div>
+         <div class="paragraph">
+          <p>Since the Kafka protocol has changed over time, clients and servers need to agree on the schema of the message that they are sending over the wire. This is done through API versioning.</p>
+         </div>
+         <div class="paragraph">
+          <p>Before each request is sent, the client sends the API key and the API version. These two 16-bit numbers, when taken together, uniquely identify the schema of the message to follow.</p>
+         </div>
+        </blockquote>
+        <div class="attribution">
+         — <a href="https://kafka.apache.org/protocol.html#protocol_compatibility" class="bare">https://kafka.apache.org/protocol.html#protocol_compatibility</a>
+        </div>
+       </div>
+       <div class="paragraph">
+        <p>You may wish to restrict your Filter to only apply to specific versions of an API. For example, "intercept all FetchRequest messages greater than api version 7". To do this you can override a method named <code>shouldHandleXyz[Request|Response]</code> on your filter like:</p>
+       </div>
+       <div class="listingblock">
+        <div class="content">
+         <pre class="CodeRay highlight"><code data-lang="java"><span class="directive">public</span> <span class="type">class</span> <span class="class">FetchFilter</span> <span class="directive">implements</span> FetchRequestFilter {
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> <span class="type">boolean</span> shouldHandleFetchRequest(<span class="type">short</span> apiVersion) {
+        <span class="keyword">return</span> apiVersion &gt; <span class="integer">7</span>;
+    }
+
+    <span class="annotation">@Override</span>
+    <span class="directive">public</span> CompletionStage&lt;RequestFilterResult&gt; onRequest(ApiKeys apiKey,
+                                                          RequestHeaderData header,
+                                                          ApiMessage body,
+                                                          FilterContext filterContext) {
+        <span class="keyword">return</span> context.forwardRequest(header, request);
+    }
+}</code></pre>
+        </div>
+       </div>
+      </div>
+     </div>
+     <div class="sect3">
+      <h4 id="filter_construction_and_configuration">2.4.7. Filter Construction and Configuration</h4>
+      <div class="paragraph">
+       <p>For Kroxylicious to instantiate and configure your custom filter we use Java’s <a href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/ServiceLoader.html" target="_blank" rel="noopener">ServiceLoader</a> API. Each Custom Filter should provide a corresponding <a href="https://javadoc.io/doc/io.kroxylicious/kroxylicious-api/0.24.0/io/kroxylicious/proxy/filter/FilterFactory.html" target="_blank" rel="noopener">FilterFactory</a> implementation that can create an instance of your custom Filter. The factory can optionally declare a configuration class that Kroxylicious will populate (using Jackson) when loading your custom Filter. The module must package a <code>META-INF/services/io.kroxylicious.proxy.filter.FilterFactory</code> file containing the classnames of each filter factory implementation into the JAR file.</p>
+      </div>
+      <div class="paragraph">
+       <p>For example in the kroxylicious-filter-archetype we have the <a href="https://github.com/kroxylicious/kroxylicious/blob/v0.24.0/kroxylicious-filter-archetype/src/main/resources/archetype-resources/src/main/java/config/SampleFilterConfig.java">SampleFilterConfig</a> class. This is used in the <a href="https://github.com/kroxylicious/kroxylicious/blob/v0.24.0/kroxylicious-filter-archetype/src/main/resources/archetype-resources/src/main/java/SampleFetchResponseFilter.java">SampleFetchResponseFilter</a>). The configuration is routed to the Filter instance via the <a href="https://github.com/kroxylicious/kroxylicious/blob/v0.24.0/kroxylicious-filter-archetype/src/main/resources/archetype-resources/src/main/java/SampleFetchResponse.java">SampleFetchResponse</a>.</p>
+      </div>
+      <div class="paragraph">
+       <p>Then, when we configure a filter in Kroxylicious configuration like:</p>
+      </div>
+      <div class="listingblock">
+       <div class="content">
+        <pre class="CodeRay highlight"><code data-lang="yaml"><span class="key">filterDefinitions</span>:
+- <span class="string"><span class="content">name: my-replacer</span></span>
+  <span class="key">type</span>: <span class="string"><span class="content">SampleFetchResponse</span></span>
+  <span class="key">config</span>:
+    <span class="key">findValue</span>: <span class="string"><span class="content">a</span></span>
+    <span class="key">replacementValue</span>: <span class="string"><span class="content">b</span></span></code></pre>
+       </div>
+      </div>
+      <div class="paragraph">
+       <p>Kroxylicious will deserialize the <code>config</code> object into a <code>SampleFilterConfig</code> and use it to construct a <code>SampleFetchResponseFilter</code> passing the <code>SampleFilterConfig</code> instance as a constructor argument.</p>
+      </div>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="packaging_filters">2.5. Packaging filters</h3>
+     <div class="paragraph">
+      <p>Filters are packaged as standard <code>.jar</code> files. A typical Custom Filter jar contains:</p>
+     </div>
+     <div class="olist arabic">
+      <ol class="arabic">
+       <li>
+        <p>Filter implementation classes</p>
+       </li>
+       <li>
+        <p>A FilterFactory implementation per Filter and service metadata (see <a href="#filter_construction_and_configuration">Filter Construction and Configuration</a>)</p>
+       </li>
+      </ol>
+     </div>
+    </div>
+    <div class="sect2">
+     <h3 id="deploying_filters">2.6. Deploying filters</h3>
+     <div class="paragraph">
+      <p>Third-party filter JARs can be deployed using the <code>classpath-plugins/</code> directory under the Kroxylicious installation directory.</p>
+     </div>
+     <div class="admonitionblock warning">
+      <table>
+       <tbody>
+        <tr>
+         <td class="icon"><i class="fa icon-warning" title="Warning"></i></td>
+         <td class="content">Loading Kroxylicious plugins from the <code>classpath-plugins/</code> directory is an Alpha feature: This feature may change, or be removed entirely, without warning in any future Kroxylicious release.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>Each plugin should be placed in its own subdirectory:</p>
+     </div>
+     <div class="listingblock">
+      <div class="content">
+       <pre class="CodeRay highlight"><code>kroxylicious/
+  libs/          <i class="conum" data-value="1"></i><b>(1)</b>
+  classpath-plugins/       <i class="conum" data-value="2"></i><b>(2)</b>
+    my-filter/
+      my-filter-1.0.jar
+      my-dependency.jar
+    another-filter/
+      another-filter-2.1.jar</code></pre>
+      </div>
+     </div>
+     <div class="colist arabic">
+      <table>
+       <tbody>
+        <tr>
+         <td><i class="conum" data-value="1"></i><b>1</b></td>
+         <td>Built-in Kroxylicious JARs (do not modify).</td>
+        </tr>
+        <tr>
+         <td><i class="conum" data-value="2"></i><b>2</b></td>
+         <td>Third-party plugin JARs, organised by plugin name.</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
+     <div class="paragraph">
+      <p>The proxy startup script automatically scans <code>classpath-plugins/</code> subdirectories and adds their contents to the Java classpath. Plugins are then discovered via <code>ServiceLoader</code> alongside the built-in filters.</p>
+     </div>
+     <div class="paragraph">
+      <p>If the <code>classpath-plugins/</code> directory does not exist, no plugin scanning is performed and the proxy starts normally.</p>
+     </div>
+     <div class="sect3">
+      <h4 id="dependency_shading">2.6.1. Dependency shading</h4>
+      <div class="admonitionblock caution">
+       <table>
+        <tbody>
+         <tr>
+          <td class="icon"><i class="fa icon-caution" title="Caution"></i></td>
+          <td class="content">There is currently no classloader isolation between plugins.</td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+      <div class="paragraph">
+       <p>All plugins share a single classpath with the proxy itself. If a plugin bundles a library that is also used by the proxy or by another plugin (for example Jackson or Guava), the classpath ordering determines which version is used at runtime. This can cause subtle failures.</p>
+      </div>
+      <div class="paragraph">
+       <p>To avoid dependency conflicts, plugin authors should shade (relocate) their transitive dependencies using the Maven Shade Plugin or an equivalent tool. Shading rewrites the package names of bundled libraries so they cannot collide with other versions on the classpath.</p>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <div class="sect1">
+   <h2 id="trademark_notice">3. Trademark notice</h2>
+   <div class="sectionbody">
+    <div class="ulist _abstract">
+     <ul>
+      <li>
+       <p>Apache Kafka is a registered trademark of The Apache Software Foundation.</p>
+      </li>
+      <li>
+       <p>Kubernetes is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Prometheus is a registered trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Strimzi is a trademark of The Linux Foundation.</p>
+      </li>
+      <li>
+       <p>Hashicorp Vault is a registered trademark of HashiCorp, Inc.</p>
+      </li>
+      <li>
+       <p>AWS Key Management Service is a trademark of Amazon.com, Inc. or its affiliates.</p>
+      </li>
+      <li>
+       <p>Microsoft, Azure, and Microsoft Entra are trademarks of the Microsoft group of companies.</p>
+      </li>
+      <li>
+       <p>Fortanix and Data Security Manager are trademarks of Fortanix, Inc.</p>
+      </li>
+      <li>
+       <p>Thales and CipherTrust Manager are trademarks of Thales Group.</p>
+      </li>
+     </ul>
+    </div>
+   </div>
+  </div>
+  <div id="footnotes">
+   <hr>
+   <div class="footnote" id="_footnotedef_1">
+    <a href="#_footnoteref_1">1</a>. The <code>context.forward*()</code> methods behave exactly as the builder form <code>.forward(header, message).complete()</code>
+   </div>
+  </div>
+ </body>
+</html>
+{% endraw %}

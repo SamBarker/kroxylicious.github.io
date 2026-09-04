@@ -1,0 +1,114 @@
+docs:
+  - title: Proxy Quick Start
+    description: Start here if you're experimenting with the proxy for the first time.
+    tags:
+      - proxy
+    rank: '000'
+    path: html/proxy-quick-start
+  - title: Proxy Guide
+    description: "Using the Proxy, including configuration, security and operation."
+    tags:
+      - proxy
+      - security
+    rank: '010'
+    path: html/kroxylicious-proxy
+  - title: Record Encryption Quick Start
+    description: Start here for an encryption-at-rest solution for Apache Kafka®.
+    tags:
+      - security
+      - filter
+    rank: '011'
+    path: html/record-encryption-quick-start
+  - title: Record Encryption Guide
+    description: Using the record encryption filter to provide encryption-at-rest
+      for Apache Kafka®.
+    tags:
+      - security
+      - filter
+    rank: '012'
+    path: html/record-encryption-guide
+  - title: Client Authentication Guide
+    description: "Configuring client authentication for the proxy, including mTLS,\
+      \ SASL authentication modes, and building authenticated subjects."
+    tags:
+      - security
+      - proxy
+    rank: '015'
+    path: html/authentication-guide
+  - title: Authorization Guide
+    description: Using the Authorization filter to provide Kafka®-equivalent access
+      controls within the proxy.
+    tags:
+      - security
+      - filter
+    rank: '016'
+    path: html/authorization-guide
+  - title: Kroxylicious Operator for Kubernetes
+    description: Using the Kroxylicious Operator to deploy and run the Proxy in a
+      Kubernetes environment.
+    tags:
+      - kubernetes
+    rank: '020'
+    path: html/kroxylicious-operator
+  - title: Kroxylicious Admission Webhook
+    description: Using the Kroxylicious Admission Webhook to inject proxy sidecars
+      into application pods in a Kubernetes environment.
+    tags:
+      - kubernetes
+    rank: '021'
+    path: html/admission-webhook-guide
+  - title: Record Validation Guide
+    description: "Using the record validation filter to ensure records follow certain\
+      \ rules, including schema and signature validity."
+    tags:
+      - governance
+      - filter
+    rank: '021'
+    path: html/record-validation-guide
+  - title: Multi-tenancy Guide
+    description: Using the multi-tenancy filter to present a single Kafka® cluster
+      as if it were multiple clusters.
+    tags:
+      - filter
+    rank: '022'
+    path: html/multi-tenancy-guide
+  - title: Entity Isolation Guide
+    description: Using the entity isolation filter to give authenticated Kafka® clients
+      a private namespace within a Kafka cluster.
+    tags:
+      - filter
+    rank: '025'
+    path: html/entity-isolation-guide
+  - title: Connection Expiration Guide
+    description: Using the connection expiration filter to avoid connection skew in
+      Kubernetes environments.
+    tags:
+      - kubernetes
+      - filter
+    rank: '030'
+    path: html/connection-expiration-guide
+  - title: Developer Quick Start
+    description: Start here if you're developing a filter for the first time.
+    tags:
+      - developer
+    rank: '031'
+    path: html/developer-quick-start
+  - title: Protocol Logger Guide
+    description: Using the protocol logger filter to log the Kafka protocol traffic
+      passing through the proxy.
+    tags:
+      - filter
+    rank: '031'
+    path: html/protocol-logger-guide
+  - title: Kroxylicious Developer Guide
+    description: Writing plugins for the proxy in the Java programming language.
+    tags:
+      - developer
+    rank: '032'
+    path: html/developer-guide
+  - title: Kroxylicious Javadocs
+    description: The Java API documentation for plugin developers.
+    tags:
+      - developer
+    path: javadoc/index.html
+    rank: '033'
