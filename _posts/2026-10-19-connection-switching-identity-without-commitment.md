@@ -110,6 +110,12 @@ If Cluster A is route index 0 and Cluster B is route index 1 across two routes:
 
 Requests flowing upstream have their node IDs translated from downstream to upstream; responses flowing downstream have them translated back. The mapping is strictly one-to-one in both directions, so every downstream ID resolves to exactly one physical broker and route with zero ambiguity.
 
+Two things follow from this that are specific to connection switching and worth saying plainly.
+
+**Routers must present coherent clusters.** For a router to be a "connection switch" it has to present a single coherent cluster as if the client was connected directly to the backing cluster. Even if it is maintaining an active connection to the hot spare for liveness purposes, it has to ensure the cluster the client sees only contains nodes from the active one. If the backing cluster has 3 nodes, so must the client-facing one. The runtime ensures a complete ID space across all configured routes. What the router puts in the `MetadataResponse` is its business — for connection switching, that's one cluster, full stop. As a rule of thumb: if you find yourself wanting to merge `MetadataResponse`s, you're not doing connection switching any more.
+
+**The ID space is virtual.** That's not a bug, it's intentional — and worth knowing. A client is talking to nodes mapped in the downstream address space. This means that a client thinks it's talking to node 4, but the proxy is translating that to node 2 once it's been through the router. In normal operation you'll never notice. It only becomes salient when you are trying to map logs between clients and brokers, because each end of the exchange has a different view of identity.
+
 Unlike most of the routing API — which gives you the mechanism and expects you to supply the logic — this is one the runtime just handles. The mapping just happens at every route boundary whether your router thought about it or not. Routers work entirely in virtual ID space; the mapping isn't even exposed to them.
 
 Because the mapping is purely local to each router, routers compose cleanly without coordinating with each other. A router doesn't need to know what the rest of the graph looks like or whether an upstream target is a physical cluster or another router in the DAG. The runtime handles the integer translation transparently on the wire, leaving custom routers to work with clean `VirtualNode` handles and focus solely on routing decisions.
