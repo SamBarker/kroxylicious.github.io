@@ -3,3 +3,27 @@ mappings:
   - name: benchmark-data
     subgroup: benchmarking-the-proxy-under-the-hood
     absoluteTarget: https://drive.google.com/drive/folders/14jR_eWoTeVQVC-WiTuZAK7NlwSVKN2a5?usp=drive_link
+  - name: cs
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: connection-switching
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: cb
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: connection-branching
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: tw
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: topic-weaving
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: pw
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+  - name: partition-weaving
+    subgroup: routing
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
