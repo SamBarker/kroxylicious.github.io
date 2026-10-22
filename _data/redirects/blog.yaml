@@ -11,10 +11,10 @@ mappings:
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
   - name: sb
     subgroup: routing
-    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/26/stream-branching-mind-the-gap.html
   - name: stream-branching
     subgroup: routing
-    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/26/stream-branching-mind-the-gap.html
   - name: tw
     subgroup: routing
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
