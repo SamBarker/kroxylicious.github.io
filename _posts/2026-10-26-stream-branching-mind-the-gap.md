@@ -181,6 +181,8 @@ The router can do what it thinks is best here: it can honour a client rack, igno
 
 One constraint the dispatcher can't escape: **proxy placement**. If the proxy is in `eu-west-1b` and the consumer is in `eu-west-1a`, pulling from a broker in `eu-west-1a` still costs a cross-AZ hop to reach the proxy first. There's no hyperspace jump. For replica routing to pay off, the proxy fleet needs to be co-located with the clients it serves. You will know this already from the post on [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}).
 
+One more constraint, this time from the protocol. Normally a fetch session lives on the broker that created it, so an incremental fetch only makes sense to that broker. If the router sends a partition's fetches to a different broker than last time, the new broker has never heard of the session. The Java client treats that as recoverable. It falls back to a full fetch and carries on, but each change costs a failed round trip. So pick a replica and stick with it unless you have a good reason to move.
+
 There's room to go further. Someone might want to explore using out-of-band telemetry — OTel metrics, say — to route fetches based on broker load within the set of in-sync replicas in the same AZ. Proximity routing alone already solves a real, expensive problem; load-aware routing within that constraint is an open question worth exploring.
 
 ## Cheap, branching is not
@@ -191,7 +193,7 @@ Inventing new requests is where we start incurring noticeable costs. Every branc
 
 Branching can have other awkward memory effects. The client's request/response is over as soon as the mainline acks, but the router may need to hold on to the request after it has sent the response to the client. Depending on the router, it could need to keep it until every related branch is done. So the memory pressure can, and likely will, outlast the exchange the client sees, and the slower the branch, the longer it stretches. It's obvious, but worth stating: more branches means more to hold, for longer.
 
-Keep it stateless. Every station handles each batch on its own. Joins, windows, and aggregations over time need state that survives restarts, rebalances, and late data — Kafka Streams and Kafka Connect exist to manage exactly that. A router that starts accumulating state across batches has become a badly built stream processor, and badly built stream processors are how senior engineers get paged at 3am.
+Keep it self-contained. Every station handles each batch on its own, acting on each request and response as it passes. Joins, windows, and aggregations over time need state that survives restarts, rebalances, and late data — Kafka Streams and Kafka Connect exist to manage exactly that. A router that starts accumulating state across batches has become a badly built stream processor, and badly built stream processors are how senior engineers get paged at 3am.
 
 ## Mind the gap
 
