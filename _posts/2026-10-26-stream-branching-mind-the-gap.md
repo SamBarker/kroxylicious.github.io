@@ -143,7 +143,7 @@ That's the normal contract: branch writes are fire-and-forget from the client's 
 
 ## Replica routing: per-request dispatch
 
-So far we've focused on produce requests — branching fetch *responses* to a second cluster is theoretically possible, but I genuinely can't think of a single reason you'd want to. If you can, let us know. We can still do useful things on the fetch response side.
+So far we've focused on produce requests. Branching on the fetch side took me a while to realise the value of, but there are two cases worth a look. The first is a branch driven by the response: the primary's `FetchResponse` goes back to the client, and the router also sends a small record of what was read (per-consumer bytes, lag, an audit trail of who read what) down a branch line. The catch is that a delivered fetch isn't a processed one, so the numbers will drift from committed offsets, and a refetch counts the same records twice. There can still be a signal in there. Any mismatches tell operators something about what's going on out there, but it needs careful handling. The second is a shadow fetch: the router sends its own read-only fetch to a candidate cluster, say to validate a passive site is in sync with the active site. The client only cares about the primary's response. The router can compare the shaow response with the primary and summon help if they aren't identical. We don't need to check every response a sample would work well here. It needs the offsets to line up between the two clusters, and the shadow must never be allowed to hold up the mainline. Both are forgiving in a way the produce side isn't. Neither is a copy of the client's data, so there's no ghost or MIA batch to reconcile. Branching isn't the only thing worth doing on the fetch side though. Sometimes the better move is to change where the fetch goes in the first place.
 
 Kafka supports rack awareness, and if you're running in the cloud you really do want it on — egress costs can be punishing. But to get it working you have to ensure every application uses `client.rack` with the correct values. If you're anything like me, you hate playing config whack-a-mole. A layer 7 proxy, one that understands the Kafka protocol, can centralise this.
 
@@ -283,10 +283,17 @@ Gaps matter in the other direction too. If the router uses a sequence number for
 
 That's harmless while each partition's traffic stays on one connection. It stops being harmless when the traffic moves — and in Kafka, traffic moves routinely:
 
-- **Leadership changes.** A partition's leader moves from broker 1 to broker 2, so the client starts sending that partition's batches down a different connection — possibly through a different proxy instance. It carries on with the same PID and the next sequence number. On the primary, that's an ordinary continuation. On the branch, the batches arrive under a PID that has never written to that partition before. The branch has no history for it, so it can't recognise any batch the client retries across the move.
 - **Reconnects.** A network blip, an idle timeout, a broker restart, a proxy rolling upgrade: anything that drops the client's connection drops the branch identity with it. The client reconnects and resends its in-flight batches — some of which had already reached the branch under the old PID. They arrive under a new PID, and the branch accepts them all as fresh writes. Reconnecting to the same proxy instance doesn't help, because the old connection's state is already gone.
+- **Leadership changes.**
+  1. A partition's leader moves from broker 1 to broker 2.
+  2. The client retries its last in-flight batch to broker 2, using the same PID it used with broker 1.
+  3. The connection to broker 2 has its own router, with its own branch PID.
+  4. The mainline broker has already seen that batch from that PID, so it discards the duplicate.
+  5. The branch broker has never seen this router's PID, so it accepts the batch. It's a duplicate, but nothing marks it as one.
 
 Both are the same failure. The client's retries for a partition move from one branch identity to another, and the branch can only deduplicate within a single identity. The mainline is unaffected — its PID belongs to the client, which holds it across every connection, every proxy instance, and every reconnect, so the primary recognises retries and discards the ones it has already committed.
+
+You could fix this inside one process by letting the routers share a PID cache. But nobody\* runs a single proxy process in production, and across processes there's nothing to share. For that you need an external state store.
 
 The runtime is stateless, so none of this is fixed for you. A filter that wants to resume the same branch identity after any of these has to bring its own state store, and that's on you. It fixes the duplicates but not the ghosts and MIA batches:
 
