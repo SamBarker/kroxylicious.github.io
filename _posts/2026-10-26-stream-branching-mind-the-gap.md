@@ -11,13 +11,13 @@ tags: [ "routing" ]
 
 [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API: instead of a fixed pipe from client to cluster, the proxy interprets the Kafka protocol and can route traffic wherever you need it to go. [Post 2]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}) covered **connection switching** — the simplest use of that capability, where the proxy picks *which* cluster a client connects to at connection time, and can switch it without the client noticing.
 
-This post is about the next pattern: **stream branching**. Where connection switching makes routing decisions that last a connection's lifetime, stream branching goes further — the router can invent additional connections the client never asked for, and send traffic down them alongside or instead of the primary.
+This post is about the next pattern: **stream branching**. Where connection switching makes routing decisions that last a connection's lifetime, stream branching goes further — the router can invent additional connections the client never asked for, and send traffic down them alongside or instead of the primary. We'll look at what that buys you, the golden rule (the mainline is the source of truth, branch lines are best effort), where it breaks, and when to get off the train.
 
 If it helps to have a mental model: think of a railway network (it's the same one post 2 started on, thankfully for all concerned). The client's stream is the express running down the mainline. At each station, the stationmaster can inspect passing traffic, re-route it to a different platform, or dispatch a whole new but very similar train down branch lines to other destinations — all without stopping the express or telling the passengers anything changed (they might notice however).
 
 ## The express doesn't wait
 
-Stream branching has one rule, and everything else in this post follows from it:
+There is one golden rule in stream branching. Everything else in this post follows from it:
 
 > **The mainline is the source of truth. Branch lines are best effort.**
 
