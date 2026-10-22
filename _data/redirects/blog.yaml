@@ -9,10 +9,10 @@ mappings:
   - name: connection-switching
     subgroup: routing
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
-  - name: cb
+  - name: sb
     subgroup: routing
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
-  - name: connection-branching
+  - name: stream-branching
     subgroup: routing
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/19/connection-switching-identity-without-commitment.html
   - name: tw
