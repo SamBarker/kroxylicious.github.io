@@ -279,7 +279,7 @@ Gaps matter in the other direction too. If the router uses a sequence number for
 
 #### One client, many connections, many branch identities
 
-**By default, branch PIDs are tied to a connection.** The router's branch PID lasts only as long as the client connection it was negotiated for. Unless something outside the proxy remembers it, it's gone when the connection closes, and the next connection negotiates a fresh one. And the client has one PID but several connections: a producer opens one to each broker that leads a partition it writes to, and in a horizontally scaled proxy fleet those connections can land on different proxy instances. The routers serving those connections can't coordinate with each other, so each one negotiates its own PID with the branch cluster. One client identity on the primary becomes several unrelated identities on the branch.
+**Branch PIDs are tied to a connection.** The router's branch PID lasts only as long as the client connection it was negotiated for. Unless something outside the proxy remembers it, it's gone when the connection closes, and the next connection negotiates a fresh one. And the client has one PID but several connections: a producer opens one to each broker that leads a partition it writes to, and in a horizontally scaled proxy fleet those connections can land on different proxy instances. The routers serving those connections can't coordinate with each other, so each one negotiates its own PID with the branch cluster. One client identity on the primary becomes several unrelated identities on the branch.
 
 That's harmless while each partition's traffic stays on one connection. It stops being harmless when the traffic moves — and in Kafka, traffic moves routinely:
 
@@ -305,7 +305,7 @@ The runtime is stateless, so none of this is fixed for you. A filter that wants 
 | Proxy restarts or rolls | Duplicates | One copy |
 | Ghost batch, and the client gives up | The ghost stays | The ghost stays |
 | MIA batch (dropped, or permanently failed) | A hole | A hole |
-| Router dies between sending and recording the state | Not applicable | A duplicate or a hole, depending on which came first |
+| Router dies between the branch write and the state store update | Not applicable | Record first, then send: a hole. Send first, then record: a duplicate |
 
 A state store takes the duplicates away and adds a dependency on the hot path, and it leaves the ghosts and MIA batches where they were. Without one, leadership changes, reconnects, and rolling upgrades are routine, so duplicates on the branch are a normal part of running stream branching, not an edge case you'll rarely see.
 
