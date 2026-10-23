@@ -52,7 +52,7 @@ graph LR
      ▲                             └──(branch)────► [ DR cluster ] (identical copy)
      │                                                                          │
      └──────────────── ProduceResponse (primary's verdict only) ◄───────────────┘
-](/assets/blog/images/routing-series/nieve-dr.svg)
+](/assets/blog/images/routing-series/naive-dr.svg)
 
 Yes, I know this looks like a DR solution, it's really not! By definition the branch is a best-effort copy; the DR cluster can have holes and duplicates that the primary doesn't — [Mind the gap](#mind-the-gap) goes into the gory details. You can't trust it for failover — the only way to verify nothing's missing is to compare both copies, and if both copies are online you don't need to fail over. If you need reliable replication to a DR cluster, use MirrorMaker 2 or [KIP-1279](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1279%3A+Cluster+Mirroring) cluster mirroring — they were designed and built for that job.
 
@@ -143,7 +143,7 @@ That's the normal contract: branch writes are fire-and-forget from the client's 
 
 ## Replica routing: per-request dispatch
 
-So far we've focused on produce requests. Branching on the fetch side took me a while to realise the value of, but there are two cases worth a look. The first is a branch driven by the response: the primary's `FetchResponse` goes back to the client, and the router also sends a small record of what was read (per-consumer bytes, lag, an audit trail of who read what) down a branch line. The catch is that a delivered fetch isn't a processed one, so the numbers will drift from committed offsets, and a refetch counts the same records twice. There can still be a signal in there. Any mismatches tell operators something about what's going on out there, but it needs careful handling. The second is a shadow fetch: the router sends its own read-only fetch to a candidate cluster, say to validate a passive site is in sync with the active site. The client only cares about the primary's response. The router can compare the shaow response with the primary and summon help if they aren't identical. We don't need to check every response a sample would work well here. It needs the offsets to line up between the two clusters, and the shadow must never be allowed to hold up the mainline. Both are forgiving in a way the produce side isn't. Neither is a copy of the client's data, so there's no ghost or MIA batch to reconcile. Branching isn't the only thing worth doing on the fetch side though. Sometimes the better move is to change where the fetch goes in the first place.
+So far we've focused on produce requests. Branching on the fetch side took me a while to realise the value of, but there are two cases worth a look. The first is a branch driven by the response: the primary's `FetchResponse` goes back to the client, and the router also sends a small record of what was read (per-consumer bytes, lag, an audit trail of who read what) down a branch line. The catch is that a delivered fetch isn't a processed one, so the numbers will drift from committed offsets, and a refetch counts the same records twice. There can still be a signal in there. Any mismatches tell operators something about what's going on out there, but it needs careful handling. The second is a shadow fetch: the router sends its own read-only fetch to a candidate cluster, say to validate a passive site is in sync with the active site. The client only cares about the primary's response. The router can compare the shadow response with the primary and summon help if they aren't identical. We don't need to check every response; a sample would work well here. It needs the offsets to line up between the two clusters, and the shadow must never be allowed to hold up the mainline. Both are forgiving in a way the produce side isn't. Neither is a copy of the client's data, so there's no ghost or MIA batch to reconcile. Branching isn't the only thing worth doing on the fetch side though. Sometimes the better move is to change where the fetch goes in the first place.
 
 Kafka supports rack awareness, and if you're running in the cloud you really do want it on — egress costs can be punishing. But to get it working you have to ensure every application uses `client.rack` with the correct values. If you're anything like me, you hate playing config whack-a-mole. A layer 7 proxy, one that understands the Kafka protocol, can centralise this.
 
@@ -197,7 +197,7 @@ Keep it self-contained. Every station handles each batch on its own, acting on e
 
 ## Mind the gap
 
-Stream Branches generally take the form of a dual write, and dual writes are like juggling with knives. Fine as long as you catch the hilt, painful if you catch the blade. 
+Stream branches generally take the form of a dual write, and dual writes are like juggling with knives. Fine as long as you catch the hilt, painful if you catch the blade.
 
 ### There is no undo
 
@@ -212,7 +212,7 @@ The simplest is **fire-and-forget**: one produce request in, one mainline produc
 
 To mitigate some of those, there is **dispatch on ack**. The router captures a copy of the client's produce request on arrival and forwards the mainline request. When the ack comes back from the mainline broker, the router replies to the client and then dispatches the branch copies asynchronously. Because the branch only ever receives batches after the mainline has committed them, ghost batches are eliminated. The mitigations aren't universal:
 
-- **Acks are per partition.** A produce response can be a partial success, what do we dispatch then? Everything? Just the ones that worked? It all depends on what is going to the branch.
+- **Acks are per partition.** A produce response can be a partial success; what do we dispatch then? Everything? Just the ones that worked? It all depends on what is going to the branch. If your branch is generating an audit trail or telemetry of successful writes, dispatching only the successes is exactly what you want. The router simply decomposes the original request and rebuilds a new batch containing only the successful partitions on the fly.
 - **Duplicates are still possible.** The client might still retry, if for any reason the ack the proxy sent never reaches the client. The client will retry, the mainline broker will discard the duplicates and ack again, and the router dispatches a second branch copy (because it gets the acks). No ghost was involved, and the branch still ends up with a duplicate.
 - **`acks=0` has nothing to trigger on.** Those producers never get a response, so we have nothing to dispatch on. Fire-and-forget is likely fine here, however.
 
@@ -246,7 +246,7 @@ So in normal running the branch both loses data *and* duplicates it, independent
 
 So if we aren't holding back the client's ack until the branch has acked, can we just ignore the branch? Not quite. The primary is healthy, staging is struggling, and unsent branch writes are piling up in the proxy. We can't buffer forever: we're a proxy, not an AI datacentre, and RAM is finite. Running out of it takes the mainline down with the branch. So we monitor the backlog, and when it grows we have two choices:
 
-- **Drop.** Throw away branch writes until the branch catches up. The mainline is unaffected; the branch gets a hole. This is the right default for nearly every branching use case, and it's what "best effort" actually means in practice.
+- **Drop.** Throw away branch writes until the branch catches up. The mainline is unaffected; the branch gets a hole. This is the right default for nearly every branching use case, and it's what "best effort" actually means in practice. Note that if the branch is an idempotent producer, dropping a batch forces the router to discard that branch PID (or bump the producer epoch) and pay the re-init penalty before the next write can go through — many auxiliary branch pipelines intentionally use `enable.idempotence=false` or `acks=1` to allow lossy drops without stalling the sequence.
 - **Block.** Stop reading from the client until the branch drains. The branch stays more complete, but the mainline now slows to match it. You've coupled the two clusters and still don't have a fidelity guarantee, so this is a hard trade to justify. If you have a use case that needs it, do get in touch and tell us about it.
 
 Whichever you choose, keep an eye on the queue. A branch that's quietly falling behind looks just like a healthy one right up until someone needs it, so export queue depth and drop counts as metrics and you'll see the trouble coming.
@@ -284,7 +284,7 @@ Gaps matter in the other direction too. If the router uses a sequence number for
 That's harmless while each partition's traffic stays on one connection. It stops being harmless when the traffic moves — and in Kafka, traffic moves routinely:
 
 - **Reconnects.** A network blip, an idle timeout, a broker restart, a proxy rolling upgrade: anything that drops the client's connection drops the branch identity with it. The client reconnects and resends its in-flight batches — some of which had already reached the branch under the old PID. They arrive under a new PID, and the branch accepts them all as fresh writes. Reconnecting to the same proxy instance doesn't help, because the old connection's state is already gone.
-- **Leadership changes.**
+- **Leadership changes:**
   1. A partition's leader moves from broker 1 to broker 2.
   2. The client retries its last in-flight batch to broker 2, using the same PID it used with broker 1.
   3. The connection to broker 2 has its own router, with its own branch PID.
@@ -293,11 +293,11 @@ That's harmless while each partition's traffic stays on one connection. It stops
 
 Both are the same failure. The client's retries for a partition move from one branch identity to another, and the branch can only deduplicate within a single identity. The mainline is unaffected — its PID belongs to the client, which holds it across every connection, every proxy instance, and every reconnect, so the primary recognises retries and discards the ones it has already committed.
 
-You could fix this inside one process by letting the routers share a PID cache. But nobody\* runs a single proxy process in production, and across processes there's nothing to share. For that you need an external state store.
+You could fix this inside one process by letting the routers share a PID cache. But nobody[^single-proc] runs a single proxy process in production, and across processes there's nothing to share. For that you need an external state store.
 
 The runtime is stateless, so none of this is fixed for you. A filter that wants to resume the same branch identity after any of these has to bring its own state store, and that's on you. It fixes the duplicates but not the ghosts and MIA batches:
 
-| What happens | stateless | With a state store |
+| What happens | Stateless | With a state store |
 |--------------|----------------|--------------------|
 | Ghost batch, then the client retries | Duplicate on the branch | The retry maps to the same branch sequence, so the branch discards it |
 | Client reconnects and resends in-flight batches | Duplicates | One copy |
@@ -315,14 +315,16 @@ Use shadow data for observability, not for accounting. If someone needs to recon
 
 ### Transactions don't branch
 
-If the client is a transactional producer, its batches are marked transactional and only meaningful together with the `AddPartitionsToTxn` and `EndTxn` calls it sends to the *primary's* transaction coordinator. The commit and abort markers that tell consumers which records count are written by the coordinator — not by the client, and not in the produce stream the proxy sees. The router never sees them, so it can't copy them.
+A transaction belongs to one cluster. The coordinator, the transaction log and the commit and abort markers all live there, so a branch on another cluster has nothing to take part in.
+
+The router can see that a batch is transactional, because it's marked as such. What it can't see from the produce stream is the transaction's state: whether it's open, which one it is, and how it ends. That lives with the coordinator, and the commit and abort markers are written by the broker, not sent by the client. The router can copy the records but not the verdict.
 
 That leaves two bad options for a transactional branch:
 
-- **Strip the transactional flag** and write the branch batches as plain idempotent writes. They're visible on the branch immediately, *including records from transactions the primary later aborts*. A `read_committed` consumer on the branch reads data that, as far as the primary is concerned, never happened.
-- **Run a shadow transaction** on the branch: the router starts its own transaction against the branch cluster's coordinator, mirrors the `AddPartitionsToTxn` calls, and commits or aborts when the client's `EndTxn` succeeds or fails on the primary. That's a lot of protocol to faithfully mirror, and the two commits are still independent. The primary can commit while the branch aborts — and nothing coordinates the two. Post 1 said it bluntly and it still holds: the Kafka protocol has no cross-cluster transaction coordinator, and routing can't invent one.
+- **Strip the transactional flag** and write the branch batches as plain idempotent writes. This throws away the semantics consumers rely on. There's no commit or abort to say where a transaction ends, so records from transactions the primary later aborts are visible on the branch immediately. A `read_committed` consumer there reads data that, as far as the primary is concerned, never happened.
+- **Run a shadow transaction** on the branch: the router starts its own transaction against the branch cluster's coordinator and tries to follow the primary's. It can't be faithful. The branch transaction is a separate transaction with its own producer ID, epoch and timeout, so it can commit or abort independently of the primary's. What a `read_committed` consumer sees on the branch needn't match what it would see on the primary. Post 1 said it bluntly and it still holds: the Kafka protocol has no cross-cluster transaction coordinator, and routing can't invent one.
 
-For shadowing and sampling, stripping the flag and documenting that the branch may contain aborted data is usually the honest choice. For derived streams that feed anything financial — don't branch from a transactional producer at all. You will regret it.
+Cloning a transaction doesn't work, but that doesn't make branching during transactions pointless. The branch sees everything, committed or not. If whatever reads the branch can live with that, it's fine. If it can't, routing isn't the solution you're looking for: you need replication.
 
 ## Know when to get off the train
 
@@ -341,3 +343,5 @@ The pattern works because it's honest about having two tiers: one stream that ca
 Both flow patterns are now covered. Connection switching picks the track. Stream branching adds branch lines. Next we leave the railway for the sorting office: **topic weaving**, where the router no longer just directs streams but decides which topics exist, where they live, and what they're called. Producer identity comes up again there, and this time the client *does* know about every cluster involved.
 
 If you're branching streams already, or want to and have hit a gap this post didn't cover, find us on [GitHub](https://github.com/kroxylicious/kroxylicious), [Slack](https://kroxylicious.slack.com), or [Bluesky](https://bsky.app/profile/kroxylicious.io).
+
+[^single-proc]: Except on localhost during a Friday demo.
