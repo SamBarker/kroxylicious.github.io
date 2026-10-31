@@ -35,6 +35,41 @@ A VKC already keeps the real cluster from the client: clients dial the proxy, ne
 
 The client really is talking to several clusters. Some of what it carries with it, like a producer ID or an open transaction, was issued by one cluster and means nothing to the others. How much that matters depends on what you're doing with it.
 
+## Whose map is it anyway?
+
+All of this hangs on one fact: every router owns a map, the `Metadata` response the client ends up seeing. The proxy supplies the plumbing to send a request down a route and get the response back, and that's all it does. It doesn't merge anything. Merging, splitting a request across clusters and stitching the replies back together are the router's job, and so is deciding what the map says.
+
+That's true of every router, not just a weaving one. A connection-switching router owns a map too, because it decides which cluster's answer the client sees. Routers can also be stacked in the DAG, so a router further along may change the map again. Each router is responsible for the changes it makes.
+
+The map is also written for whoever is asking. Nothing says two clients get the same `Metadata` response. The router can give each identity its own view, as long as every proxy instance gives that identity the same answer. If two instances disagree, topics appear and disappear depending on who answered. It also means the router has to know who is asking, so this depends on authentication being in place.
+
+### Where the map comes from
+
+The simplest source is a table you write down: `orders` is visible from cluster A, `payments` from cluster B. That's a static, client-facing map. The config says what *should* be visible from each backing cluster, but it can't invent a topic. If `payments` doesn't exist on B, it doesn't appear, because the router can only show what the cluster actually has. The trouble is that it's static. Clusters drift. Somebody creates a topic the map has never heard of and it stays invisible until a human edits the config. Somebody deletes one and it quietly vanishes from the client's view.
+
+A rule lets the map follow the clusters instead. The simplest is a prefixing router. Say each of the clusters has an `orders` topic. The router gives every cluster a prefix and applies it to whatever that cluster reports, so the client sees `london_orders`, `tokyo_orders` and `newyork_orders`. Nobody has to tell it about a new topic, because it never had a list. The rule has to be deterministic, though: `orders` from the "London" cluster must be `london_orders` today, tomorrow, after every restart, and on every proxy instance.
+
+The rule has to run in both directions. The prefix goes on in `Metadata` responses. It comes off again in every request that names a topic, and the router uses it to pick the cluster. The brokers never hear of `london_orders`. The catch is that the topic name now says which cluster it lives on, which is a little of what weaving was meant to hide. Sometimes that's exactly what you want.
+
+A catalogue service is the same idea with the rule replaced by a lookup. It says which physical topic on which cluster is known to an identity as what, so the names don't have to follow a pattern at all, and it can change at runtime. Either way the router translates in both directions.
+
+### Who sees what
+
+Whatever the source, the router still decides what ends up in the response. When two clusters both have an `orders`, it can include only cluster A's, include both with a prefix, or exclude both. That is policy, and it belongs to the router.
+
+Because the map is per identity, the same machinery covers RBAC, tenant-specific rules and filtering. A topic can be visible to one identity and absent for another. What no map can do is move a topic. It only says where one is.
+
+## What a weaving router has to do
+
+Whichever way the map is built, the router has three jobs:
+
+- **Metadata.** Ask every backing cluster, keep the topics the map shows this identity, and return the lot as one response.
+- **Produce and fetch.** Group the topics in a request by the cluster they belong to, send the pieces in parallel, and merge the replies into one.
+- **Enforce the map.** Apply the same rules to every request that names a topic, not just `Metadata`. Hiding a topic from a response isn't enough if a `Produce` can still name it.
+
+This section describes what a router for this pattern has to do, not a list of features you can switch on today.
+
+
 ## Transactions stop at the cluster boundary
 
 A transactional producer starts by sending `FindCoordinator` for its `transactional.id`, then `InitProducerId` to whichever broker the answer names. From then on that coordinator tracks the transaction, and when the producer commits it writes the commit or abort markers to the partitions involved. The coordinator, its transaction log and those markers all belong to one cluster.
@@ -72,7 +107,7 @@ Does it matter? We don't know what your business does with Kafka. Transactions a
 
 - [x] Introduction: what the sorting office does that the railway station didn't
 - [x] Refresher: how the existing patterns are different (what the client knows, what it doesn't)
-- [ ] The topic map: how the router decides which topic lives where
+- [x] The topic map: how the router decides which topic lives where
 - [ ] The client's view: Metadata, ListTopics, and the virtual namespace
 - [ ] Producing: why node ID translation isn't enough, and why PID translation is hard
   - Pull in stash from `stash-replica-routing.md` — "why PIDs aren't node IDs"
