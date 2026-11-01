@@ -49,7 +49,7 @@ The simplest source is a table you write down: `orders` is visible from cluster 
 
 A rule lets the map follow the clusters instead. The simplest is a prefixing router. Say each of the clusters has an `orders` topic. The router gives every cluster a prefix and applies it to whatever that cluster reports, so the client sees `london_orders`, `tokyo_orders` and `newyork_orders`. Nobody has to tell it about a new topic, because it never had a list. The rule has to be deterministic, though: `orders` from the "London" cluster must be `london_orders` today, tomorrow, after every restart, and on every proxy instance.
 
-The rule has to run in both directions. The prefix goes on in `Metadata` responses. It comes off again in every request that names a topic, and the router uses it to pick the cluster. The brokers never hear of `london_orders`. The catch is that the topic name now says which cluster it lives on, which is a little of what weaving was meant to hide. Sometimes that's exactly what you want.
+The rule has to run in both directions. The prefix goes on in `Metadata` responses. It comes off again in every request that names a topic, and the router uses it to pick the cluster. The brokers never hear of `london_orders`. It could be argued that the topic name now leaks the physical reality, since it says which cluster the topic lives on. That may be intentional and is perfectly reasonable when it is. From the client's point of view it's a naming convention, not a routing decision.
 
 A catalogue service is the same idea with the rule replaced by a lookup. It says which physical topic on which cluster is known to an identity as what, so the names don't have to follow a pattern at all, and it can change at runtime. Either way the router translates in both directions.
 
@@ -58,6 +58,22 @@ A catalogue service is the same idea with the rule replaced by a lookup. It says
 Whatever the source, the router still decides what ends up in the response. When two clusters both have an `orders`, it can include only cluster A's, include both with a prefix, or exclude both. That is policy, and it belongs to the router.
 
 Because the map is per identity, the same machinery covers RBAC, tenant-specific rules and filtering. A topic can be visible to one identity and absent for another. What no map can do is move a topic. It only says where one is.
+
+### Writing to the map
+
+Everything so far has been about reading the map, and reading is aggregation. Each cluster reports what it has and the router combines the answers into one view. The clusters are the source of truth, and the router only decides which of their answers to show. Writes run the other way, and there is no source of truth to consult. A client calls `CreateTopics` for `X`: one request, which the router has to turn into work for some of the clusters. One, several or none. Neither the request nor the clusters say which. That's disaggregation, and the answer can only come from policy. There's no automatically correct one, and each option has a price:
+
+- **A default cluster.** Simple and predictable. But one cluster risks becoming a hotchpotch of disjointed topics, and nothing about where the data ought to live gets a say.
+- **A rule on the name.** `london_orders` goes to London. No state, and the map follows for free. But the name is the placement, so moving a topic means renaming it, and a name that doesn't fit the convention needs somewhere to go.
+- **A catalogue.** Placement is decided centrally and names can be anything. But a create is now two steps, update the catalogue and create the topic, and either can fail and leave the other behind.
+- **Every cluster.** The name exists everywhere, which is convenient for reads. It doesn't share any data, since each cluster still holds its own. But the create is now a dual write, the problem from [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}). If it works on A and fails on B, the topic half exists, and the router has to decide what to tell the client.
+- **Refuse.** The platform team owns the topology and nothing surprising appears. But anything that creates topics for itself, Kafka Streams being the usual suspect, stops working.
+
+All of these are legitimate. Which is right depends on who owns the topics and how much you trust the clients, so it's the router's call and the proxy has no opinion.
+
+The one rule is that a write has to agree with the map. If the create lands on cluster B but the map says `X` lives on A, or doesn't mention `X` at all, the client is told it worked and then can't find its topic. A prefix rule gets this for free, because the prefix already says where `X` goes. A table or a catalogue has to be updated as part of the create, and that's the router's job too.
+
+`DeleteTopics`, `CreatePartitions` and `AlterConfigs` are the same question with a different verb: how many clusters, and which. Once the topic exists the map answers it.
 
 ## Broker IDs collide too
 
@@ -122,7 +138,7 @@ Does it matter? We don't know what your business does with Kafka. Transactions a
 - [x] The topic map: how the router decides which topic lives where
 - [x] Broker ID collision: recap the post 2 formula, why weaving needs it permanently
 - [x] The client's view: folded into the map and "What the client knows" sections (ListTopics is just unfiltered Metadata)
-- [ ] Admin operations that name topics (CreateTopics, DeleteTopics, DescribeConfigs): which cluster owns a new topic? Add to the router's jobs or "Who sees what"
+- [x] Admin operations that name topics: "Writing to the map" under "Who sees what"
 - [ ] Producing: why node ID translation isn't enough, and why PID translation is hard
   - Pull in stash from `stash-replica-routing.md` — "why PIDs aren't node IDs"
 - [ ] Consuming: the simpler side — passing upstream PIDs through, `read_committed` caveats
