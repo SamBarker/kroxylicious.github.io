@@ -115,6 +115,30 @@ We haven't built this, so treat it as a direction rather than a recipe. The boss
 
 A consumer never hands a producer ID back to a broker. A `read_committed` consumer sees the one cluster's ID in the batch headers, the commit and abort markers and the aborted-transaction list of a fetch response, and all three come from the same cluster for the same partition. They already agree with each other, so the router passes them through. The one rule is for anything that rebuilds fetch batches: preserve the producer ID, epoch and control-batch flags, and keep the aborted list consistent.
 
+## Picking a boss
+
+The producer ID map is the first time we have reached for a **boss** cluster, but the underlying problem keeps recurring.
+
+Reads aggregate naturally. Every cluster reports what it has, and the router combines the answers into a single view. Writes and state do not aggregate, because there is no existing reality across the clusters to consult. When a client creates a topic, negotiates an identity, or coordinates a decision, the router cannot ask the backing clusters for an answer that does not exist yet. It has to make a choice, and it has to remember what it chose. That memory must survive proxy restarts and be shared across a fleet of proxy instances without inventing a new consensus layer. The Kafka-native answer is to pick one cluster to host that shared state: a **boss** cluster.
+
+None of the boss cluster roles are tested. They make sense in principle, but they split on what the cluster is asked to do:
+
+| Problem | Job | In principle? |
+| --- | --- | --- |
+| Topic creation (`CreateTopics`) | Default cluster for new topics (or catalogue store) | Works, with the hotchpotch caveat |
+| Producer ID mapping | Registry in a compacted topic | Works |
+| Transactions | The boss's coordinator runs every transaction | Fails (participant) |
+| Distributed commit (KIP-939) | Decision log for two-phase commit | Feasible, untested |
+
+The test for whether a boss works is whether it acts as a **store** or as a **participant**.
+
+When the boss is a store, it holds proxy bookkeeping in internal topics. The proxy writes its state there and reads it back; the brokers on the boss are just durable storage for bytes, and the proxy enforces the semantics. When the boss is a participant, client traffic lands on it directly. Any write to the boss cluster makes it a participant. That works for `CreateTopics` where the boss hosts the newly created topic, but it fails when the boss is expected to participate on behalf of other clusters. A transaction coordinator on the boss can track and commit writes to its own partitions, but it rejects writes to partitions on other clusters because they do not exist in its metadata.
+
+Where that boss cluster lives is a separate choice:
+
+- **One of the data clusters.** The cheapest option: no extra infrastructure to deploy or monitor. But you couple the control plane of all your clusters to one of them. If that data cluster goes down or undergoes maintenance, administrative operations and new producers stall across the entire mesh.
+- **A small dedicated cluster.** Isolates the router's state and blast radius from tenant data traffic. If a data cluster fails, only its own topics are affected. The cost is the operational overhead of running one more Kafka cluster.
+
 ## What a weaving router has to do
 
 Whichever way the map is built, the router has three jobs:
@@ -136,7 +160,7 @@ It falls over at commit. The client sends one `EndTxn` and the router has to tur
 
 A state store doesn't rescue this. It can remember that the router meant to commit cluster 2, but it can't make cluster 2 agree. Reordering the commits doesn't help either, because whichever goes first can't be undone.
 
-So stop negotiating and pick a boss, as we did for producer IDs. This time the boss's coordinator runs every transaction. The client's `InitProducerId`, `AddPartitionsToTxn` and `EndTxn` all go there, while the records still go to whichever cluster owns the topic. Commit is now a single decision on a single coordinator, so the atomicity problem is gone.
+So stop negotiating and pick a boss again, but this time as a participant rather than a store. The boss's coordinator runs every transaction. The client's `InitProducerId`, `AddPartitionsToTxn` and `EndTxn` all go there, while the records still go to whichever cluster owns the topic. Commit is now a single decision on a single coordinator, so the atomicity problem is gone.
 
 It doesn't survive the first write to another cluster. The client registers each partition with the coordinator before it writes to it, and the boss's coordinator doesn't recognise `inventory`'s partitions, because they aren't in its cluster. It refuses them, and the transaction never gets as far as commit.
 
