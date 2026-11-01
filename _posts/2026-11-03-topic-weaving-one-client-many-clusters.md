@@ -87,6 +87,34 @@ For weaving, that makes merging a non-event. Each route's `Metadata` arrives alr
 
 Node IDs are the easy case. They're a pure function of where a broker lives, so the runtime can translate them with arithmetic and no memory. Not everything the client carries around is that obliging.
 
+## Producer IDs are not node IDs
+
+A producer ID looks like the same problem. It's an integer, a cluster hands it out, and the client carries it around and hands it back. So why not map it the same way? Because a node ID is spatial and a producer ID is temporal. A node ID is a coordinate: the proxy can lie about it as much as it likes, because no broker ever sees the lie, and if the proxy forgets its mapping it rebuilds the same one from the next `Metadata` response. A producer ID is a claim to be a particular live producer. The broker tracks it, uses it to discard retried batches, and fences anyone who presents it with a stale epoch. Lose the mapping and you can't recompute it, because the identity was negotiated rather than derived.
+
+That matters because every idempotent producer has one, and idempotence is the default. Each cluster issues its own `(producer ID, epoch)` pair, and the pair from cluster A means nothing to cluster B. The router has to give the client one identity and keep a map to the rest.
+
+It also costs more than node IDs did. The producer ID is inside the checksummed part of a record batch, so rewriting it means decoding the batch, changing the header and recomputing the CRC. Weaving gives up zero-copy on the produce path.
+
+### Where the map lives
+
+The map has to survive a proxy restart and be visible to every proxy instance, because a client holds one connection per partition leader and those can land on different instances. So it needs a store, and building a consensus layer into the proxy is the wrong answer.
+
+Kafka already has durable, replicated storage, so use it. Pick one cluster to be the **boss**. On it, keep a compacted topic keyed by the client's producer ID, whose value maps each backing cluster to the `(producer ID, epoch)` it issued. When the client calls `InitProducerId`, the router initialises a producer on every backing cluster, writes the map to the boss, waits for the ack, and only then replies. Any instance that sees an unfamiliar producer ID reads the topic to find the map, and caches it from then on.
+
+The map is small and changes only at init or when an epoch is bumped, so none of this is on the produce path. The sequence numbers are the part you'd expect to be hard, and they turn out not to be. They're counted per producer and partition, a partition lives on exactly one cluster, and weaving sends each client batch upstream as exactly one batch for the same partition. The router passes the sequence through untouched. Only the producer ID and epoch are rewritten. As long as every cluster's producer is initialised together, the counts start in step and stay there, so nothing needs storing per batch.
+
+That doesn't make it free:
+
+- **The boss is a dependency.** If it's down, no new producer can start. Existing producers carry on from each instance's cache, but a restarted instance has to read the topic before it can serve them.
+- **Initialising everywhere is eager.** One backing cluster being unavailable blocks new producers on all the others, including ones that would never have written to it.
+- **The map needs cleaning up.** Every short-lived producer leaves a key that compaction keeps until something removes it.
+
+We haven't built this, so treat it as a direction rather than a recipe. The boss will come up again.
+
+### Consuming is the easy side
+
+A consumer never hands a producer ID back to a broker. A `read_committed` consumer sees the one cluster's ID in the batch headers, the commit and abort markers and the aborted-transaction list of a fetch response, and all three come from the same cluster for the same partition. They already agree with each other, so the router passes them through. The one rule is for anything that rebuilds fetch batches: preserve the producer ID, epoch and control-batch flags, and keep the aborted list consistent.
+
 ## What a weaving router has to do
 
 Whichever way the map is built, the router has three jobs:
@@ -102,15 +130,15 @@ This section describes what a router for this pattern has to do, not a list of f
 
 A transactional producer starts by sending `FindCoordinator` for its `transactional.id`, then `InitProducerId` to whichever broker the answer names. From then on that coordinator tracks the transaction, and when the producer commits it writes the commit or abort markers to the partitions involved. The coordinator, its transaction log and those markers all belong to one cluster.
 
-A coordinator can only see its own cluster, so the obvious answer is to give the client one everywhere. The router fans `InitProducerId` out to every backing cluster and starts a transaction on each. As the client registers partitions and produces, the router sends each call to the cluster that owns the topic, using the producer ID and epoch that cluster issued. The client holds one producer ID and the router holds the mapping to the rest. That mapping has to survive a router restart and be visible to every proxy instance, so it needs a state store. That's real work, but it's work you can do.
+A coordinator can only see its own cluster, so the obvious answer is to give the client one everywhere. The router fans `InitProducerId` out to every backing cluster and starts a transaction on each. As the client registers partitions and produces, the router sends each call to the cluster that owns the topic, using the producer ID and epoch that cluster issued. The client holds one producer ID and the router holds the mapping to the rest. That mapping has to survive a router restart and be visible to every proxy instance, so it needs the kind of store described [above](#where-the-map-lives). That's real work, but it's work you can do.
 
 It falls over at commit. The client sends one `EndTxn` and the router has to turn it into one per cluster. On each cluster, commit is a point of no return: once the coordinator has written its decision, it will commit, whatever else happens. Until then it is free to refuse, and each cluster decides for itself. Cluster 1 can pass the point of no return while cluster 2 says no. None of the ways cluster 2 can say no are transient. The transaction may have timed out, since each cluster runs its own clock from the first partition added there. A zombie may have bumped the producer epoch. The ACLs may differ. Then `orders` has its records and `inventory` doesn't, and whatever the client is told is wrong for one of them.
 
 A state store doesn't rescue this. It can remember that the router meant to commit cluster 2, but it can't make cluster 2 agree. Reordering the commits doesn't help either, because whichever goes first can't be undone.
 
-So stop negotiating and pick a boss. One cluster is the primary, and its coordinator runs every transaction. The client's `InitProducerId`, `AddPartitionsToTxn` and `EndTxn` all go there, while the records still go to whichever cluster owns the topic. Commit is now a single decision on a single coordinator, so the atomicity problem is gone.
+So stop negotiating and pick a boss, as we did for producer IDs. This time the boss's coordinator runs every transaction. The client's `InitProducerId`, `AddPartitionsToTxn` and `EndTxn` all go there, while the records still go to whichever cluster owns the topic. Commit is now a single decision on a single coordinator, so the atomicity problem is gone.
 
-It doesn't survive the first write to another cluster. The client registers each partition with the coordinator before it writes to it, and the primary's coordinator doesn't recognise `inventory`'s partitions, because they aren't in its cluster. It refuses them, and the transaction never gets as far as commit.
+It doesn't survive the first write to another cluster. The client registers each partition with the coordinator before it writes to it, and the boss's coordinator doesn't recognise `inventory`'s partitions, because they aren't in its cluster. It refuses them, and the transaction never gets as far as commit.
 
 Both attempts fail for the same reason. Somewhere there has to be a moment when every cluster has promised to commit before any of them does, and Kafka's transaction protocol has no such step.
 
@@ -120,7 +148,7 @@ Both attempts fail for the same reason. Somewhere there has to be a moment when 
 
 In principle the router could be that coordinator. It would start a transaction on each backing cluster, wait for all of them to prepare, record the decision, and then tell each one to commit. The client would still believe it was talking to a single coordinator. The hard part is the middle step. Someone has to durably record the decision between "everyone prepared" and "everyone committed", and survive a crash in the gap. A router that does that needs a durable log of its own, recovery after a restart, and a way to stop two proxy instances disagreeing about the outcome. That is the consensus layer from [post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}), and the Kafka community has just spent years moving from ZooKeeper to KRaft so that nobody has to run a second consensus system alongside Kafka. Asking a proxy to bring its own would be a step backwards.
 
-That said, this is where a boss cluster might earn its keep. Pick one cluster to hold the router's state, and keep the decision log in a compacted topic on it. Kafka already gives you durable, replicated storage there, with nothing new to deploy. The recovery logic is still yours to write. We haven't investigated this design in any depth, so treat it as a direction rather than a recipe.
+That said, this is where the boss earns a second job. The decision log could live in a compacted topic on the same cluster that holds the producer ID map, with nothing new to deploy. The recovery logic is still yours to write. We haven't investigated this design in any depth, so treat it as a direction rather than a recipe.
 
 That gets harder still when the client is already a coordinator. A stream processor like Flink can run its own two-phase commit across Kafka and other systems. Put a weaving router in front of Kafka and Flink sees one participant, while the router has to act as a coordinator for the clusters behind it: two-phase commit nested inside two-phase commit. The KIP describes a flat arrangement of one coordinator and its participants, and says nothing about a participant in the middle.
 
@@ -139,9 +167,9 @@ Does it matter? We don't know what your business does with Kafka. Transactions a
 - [x] Broker ID collision: recap the post 2 formula, why weaving needs it permanently
 - [x] The client's view: folded into the map and "What the client knows" sections (ListTopics is just unfiltered Metadata)
 - [x] Admin operations that name topics: "Writing to the map" under "Who sees what"
-- [ ] Producing: why node ID translation isn't enough, and why PID translation is hard
+- [x] Producing: why node ID translation isn't enough, and why PID translation is hard
   - Pull in stash from `stash-replica-routing.md` — "why PIDs aren't node IDs"
-- [ ] Consuming: the simpler side — passing upstream PIDs through, `read_committed` caveats
+- [x] Consuming: the simpler side — passing upstream PIDs through, `read_committed` caveats
 - [x] Transactions: the coordinator lives on one cluster, and that's all
   - Reference Post 3's transactions section; explain how weaving makes it worse
 - [x] KIP-939 and why it isn't magic
