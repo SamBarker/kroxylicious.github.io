@@ -59,6 +59,18 @@ Whatever the source, the router still decides what ends up in the response. When
 
 Because the map is per identity, the same machinery covers RBAC, tenant-specific rules and filtering. A topic can be visible to one identity and absent for another. What no map can do is move a topic. It only says where one is.
 
+## Broker IDs collide too
+
+Topic names aren't the only thing two clusters can have in common. Nearly every Kafka cluster numbers its brokers from 0 or 1, so cluster A has a broker 2 and so does cluster B. It's the Platform 2 problem from [post 2]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}) again, and it's no less fatal here: put both in one `MetadataResponse` and the client has two different brokers answering to the same number. Broker 2 is Broker 2, remember.
+
+The good news is that nobody writing a router has to deal with it. The runtime does, at every route boundary, with the same bijection as before: `downstreamId = (upstreamId * numRoutes) + routeIndex`. Broker 2 on route 0 becomes 4, broker 2 on route 1 becomes 5, and requests are mapped back again on their way upstream. A router never sees the formula, only the IDs on its side of the boundary.
+
+That last part is what allows us to compose routers into a DAG, and thus manage the complexity. What a router calls node 4 might be a real broker, or it might be a virtual node presented by another router further along. It neither knows nor cares. The IDs the client uses are the downstream side of the first router it meets; everything upstream of that is somebody else's business, with its own mapping at its own boundary. They compose without anyone having to coordinate.
+
+For weaving, that makes merging a non-event. Each route's `Metadata` arrives already mapped into the router's ID space, so the broker lists can be concatenated without a thought for collisions. It's a bigger deal than it was for connection switching, where the client only ever saw one cluster's brokers at a time. Here every cluster's brokers are live at once. The constraint from post 2 comes along too: change the number of routes and every ID moves.
+
+Node IDs are the easy case. They're a pure function of where a broker lives, so the runtime can translate them with arithmetic and no memory. Not everything the client carries around is that obliging.
+
 ## What a weaving router has to do
 
 Whichever way the map is built, the router has three jobs:
@@ -108,7 +120,9 @@ Does it matter? We don't know what your business does with Kafka. Transactions a
 - [x] Introduction: what the sorting office does that the railway station didn't
 - [x] Refresher: how the existing patterns are different (what the client knows, what it doesn't)
 - [x] The topic map: how the router decides which topic lives where
-- [ ] The client's view: Metadata, ListTopics, and the virtual namespace
+- [x] Broker ID collision: recap the post 2 formula, why weaving needs it permanently
+- [x] The client's view: folded into the map and "What the client knows" sections (ListTopics is just unfiltered Metadata)
+- [ ] Admin operations that name topics (CreateTopics, DeleteTopics, DescribeConfigs): which cluster owns a new topic? Add to the router's jobs or "Who sees what"
 - [ ] Producing: why node ID translation isn't enough, and why PID translation is hard
   - Pull in stash from `stash-replica-routing.md` — "why PIDs aren't node IDs"
 - [ ] Consuming: the simpler side — passing upstream PIDs through, `read_committed` caveats
