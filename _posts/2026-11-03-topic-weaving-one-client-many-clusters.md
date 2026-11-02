@@ -218,34 +218,5 @@ Which leaves one final question. If we can weave whole topics together to build 
 
 In the final post of the series, we go all the way down into the protocol engine room: **partition weaving**. We’ll look at what happens when a single logical topic is assembled from physical partitions living on different clusters, under different names, and how the proxy survives rewriting partition numbers across every RPC in the Kafka protocol.
 
-If you’re weaving topics already, or exploring how to manage multi-cluster topologies, find us on [GitHub](https://github.com/kroxylicious/kroxylicious), [Slack](https://kroxylicious.slack.com), or [Bluesky](https://bsky.app/profile/kroxylicious.io).
+If this is the sort of problem you're wrestling with, or if topic weaving looks like something you could use, come and talk to us on [GitHub](https://github.com/kroxylicious/kroxylicious), [Slack](https://kroxylicious.slack.com), or [Bluesky](https://bsky.app/profile/kroxylicious.io).
 
-
-## TODO
-
-- [x] Introduction: what the sorting office does that the railway station didn't
-- [x] Refresher: how the existing patterns are different (what the client knows, what it doesn't)
-- [x] The topic map: how the router decides which topic lives where
-- [x] Broker ID collision: recap the post 2 formula, why weaving needs it permanently
-- [x] The client's view: folded into the map and "What the client knows" sections (ListTopics is just unfiltered Metadata)
-- [x] Admin operations that name topics: "Writing to the map" under "Who sees what"
-- [x] Producing: why node ID translation isn't enough, and why PID translation is hard
-  - Pull in stash from `stash-replica-routing.md` — "why PIDs aren't node IDs"
-- [x] Consuming: the simpler side — passing upstream PIDs through, `read_committed` caveats
-- [x] Transactions: the coordinator lives on one cluster, and that's all
-  - Reference Post 3's transactions section; explain how weaving makes it worse
-- [x] KIP-939 and why it isn't magic
-  - Link/summarise the Gemini doc before quoting
-- [x] Proxy placement: run it in the client's network/trust zone, not co-located with any single cluster, so a cluster failure doesn't take the proxy with it
-- [x] When to use weaving vs replication vs connection switching
-- [x] Closing: what's next in the series
-
----
-
-*Stash and working notes follow below — remove before publishing.*
-
----
-
-<!-- stash: PID vs node ID argument (from stash-replica-routing.md) -->
-<!-- stash: weaving produce/consume PID treatment -->
-<!-- stash: KIP-939 note -->
