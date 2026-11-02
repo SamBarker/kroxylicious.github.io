@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Topic Weaving: One client, many clusters"
-date: 2026-11-03 15:00:00 +1300
+date: 2026-11-02 15:00:00 -0800
 author: "Sam Barker"
 author_url: "https://github.com/sambarker"
 # noinspection YAMLSchemaValidation
