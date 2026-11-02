@@ -9,7 +9,7 @@ categories: blog kroxylicious-proxy
 tags: [ "routing" ]
 ---
 
-This is the fourth post in a series about routing in Kroxylicious. [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API and named four patterns for using it: [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}), [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}), topic weaving and partition weaving. This post covers the third, **topic weaving**.
+This is the fourth post in a series about routing in Kroxylicious. [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API and named four patterns for using it: [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}), [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}), topic weaving and partition weaving. This post covers the third, topic weaving.
 
 Kafka clusters accumulate. Teams get their own cluster for isolation, another spins up for a different region, a third appears because somebody hit a partition limit and it was quicker to provision hardware than fight for headroom. The data teams feel it first: every pipeline that crosses a cluster boundary needs its own bootstrap config, its own credentials, its own mental model of which topic lives where. A data engineer building a join across two domains has to know which physical cluster each topic lives on — not because it's relevant to their problem, but because Kafka makes it unavoidable.
 
@@ -22,6 +22,8 @@ The proxy sits in the middle and speaks Kafka, so it gets to write that response
 That's topic weaving. The client connects to a single VKC, but the namespace behind it is stitched together from topics on several real clusters. Topic A lives on cluster 1, topic B lives on cluster 2, and the router holds the map. Connection switching and stream branching both treat the cluster as the unit of routing: you're deciding *where* traffic lands. Weaving decides *which topics* exist, where they live, and which applications can see them. The platform team encodes that once, in the routing layer, instead of every pipeline carrying its own copy.
 
 The railway metaphor has served us well but it runs out of track here. Think of a sorting office instead. Parcels arrive addressed to a virtual destination — `orders`, `payments`, `inventory` — and the sorter routes each one down the right chute to its actual cluster. Every backing cluster is a peer — every write counts. That's also why there are sharp edges. A transaction requires a coordinator, and a coordinator can only see its own cluster. If you need to write atomically to `orders` and `inventory` and they live on different clusters, the sorting office can't help you.
+
+The sorting office also has to solve a naming problem. One parcel is addressed `orders`. Fine — except this is an office that handles international mail, and two different countries have sent you a parcel addressed `orders`. The sorter can't just route one of them, because both exist. It has to decide: rename one, suppress one, or return both with distinct labels so the recipient knows which country each came from. That decision is policy, and it belongs to whoever runs the office. The parcel doesn't get a vote.
 
 ## What the client knows
 
@@ -37,11 +39,13 @@ The client really is talking to several clusters. Some of what it carries with i
 
 ## Whose map is it anyway?
 
-All of this hangs on one fact: every router owns a map, the `Metadata` response the client ends up seeing. The proxy supplies the plumbing to send a request down a route and get the response back, and that's all it does. It doesn't merge anything. Merging, splitting a request across clusters and stitching the replies back together are the router's job, and so is deciding what the map says.
+All of this hangs on one fact: every router owns a map — the `Metadata` response the client ends up seeing. The proxy supplies the plumbing to send a request down a route and get the answer back, and that's all it does. It doesn't merge anything. Splitting a request across clusters and stitching the replies together are the router's job, and so is deciding what goes in the map.
 
-That's true of every router, not just a weaving one. A connection-switching router owns a map too, because it decides which cluster's answer the client sees. Routers can also be stacked in the DAG, so a router further along may change the map again. Each router is responsible for the changes it makes.
+### The map is per identity
 
-The map is also written for whoever is asking. Nothing says two clients get the same `Metadata` response. The router can give each identity its own view, as long as every proxy instance gives that identity the same answer. If two instances disagree, topics appear and disappear depending on who answered. It also means the router has to know who is asking, so this depends on authentication being in place.
+A realisation from drafting a weaving router: nothing says two clients have to get the same `Metadata` response. The router can give each identity its own view of the namespace — different topic sets, different names for the same physical topic, or a completely different slice of the backing clusters. This is the same machinery that covers RBAC and multi-tenancy: a topic can be visible to one identity and absent for another. What no map can do is move a topic. It only says where one is.
+
+One constraint follows directly: **every proxy instance must give the same identity the same answer**. If two instances return different maps for the same identity, topics appear and disappear depending on which instance answered. A static config satisfies this for free. The router has to know who is asking, so this also depends on authentication being in place.
 
 ### Where the map comes from
 
@@ -55,9 +59,7 @@ A catalogue service is the same idea with the rule replaced by a lookup. It says
 
 ### Who sees what
 
-Whatever the source, the router still decides what ends up in the response. When two clusters both have an `orders`, it can include only cluster A's, include both with a prefix, or exclude both. That is policy, and it belongs to the router.
-
-Because the map is per identity, the same machinery covers RBAC, tenant-specific rules and filtering. A topic can be visible to one identity and absent for another. What no map can do is move a topic. It only says where one is.
+This is where the sorting office comes into its own. When two clusters both have an `orders`, the sorter has to decide: route only cluster A's parcels as `orders`, route cluster B's as `orders` too (now there's a collision), give each a distinct label — `london_orders` and `tokyo_orders` — or reject the ambiguity entirely and return neither. Those are all legitimate choices; which is right depends on policy. The router makes the call. The proxy has no opinion.
 
 ### Writing to the map
 
@@ -77,13 +79,13 @@ The one rule is that a write has to agree with the map. If the create lands on c
 
 ## Broker IDs collide too
 
-Topic names aren't the only thing two clusters can have in common. Nearly every Kafka cluster numbers its brokers from 0 or 1, so cluster A has a broker 2 and so does cluster B. It's the Platform 2 problem from [post 2]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}) again, and it's no less fatal here: put both in one `MetadataResponse` and the client has two different brokers answering to the same number. Broker 2 is Broker 2, remember.
+Topic names aren't the only thing two clusters can have in common. Many Kafka clusters number their brokers from 0 or 1, so cluster A has a broker 2 and so does cluster B. It's the Platform 2 problem from [Post 2]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}) again: put both in one `MetadataResponse` and the client has two different brokers answering to the same number. Broker 2 is Broker 2, remember.
 
 The good news is that nobody writing a router has to deal with it. The runtime does, at every route boundary, with the same bijection as before: `downstreamId = (upstreamId * numRoutes) + routeIndex`. Broker 2 on route 0 becomes 4, broker 2 on route 1 becomes 5, and requests are mapped back again on their way upstream. A router never sees the formula, only the IDs on its side of the boundary.
 
 That last part is what allows us to compose routers into a DAG, and thus manage the complexity. What a router calls node 4 might be a real broker, or it might be a virtual node presented by another router further along. It neither knows nor cares. The IDs the client uses are the downstream side of the first router it meets; everything upstream of that is somebody else's business, with its own mapping at its own boundary. They compose without anyone having to coordinate.
 
-For weaving, that makes merging a non-event. Each route's `Metadata` arrives already mapped into the router's ID space, so the broker lists can be concatenated without a thought for collisions. It's a bigger deal than it was for connection switching, where the client only ever saw one cluster's brokers at a time. Here every cluster's brokers are live at once. The constraint from post 2 comes along too: change the number of routes and every ID moves.
+For weaving, that makes merging a non-event. Each route's `Metadata` arrives already mapped into the router's ID space, so the broker lists can be concatenated without a thought for collisions. It's a bigger deal than it was for connection switching, where the client only ever saw one cluster's brokers at a time. Here every cluster's brokers are live at once. The constraint from [Post 2]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}) comes along too: change the number of routes and every ID moves.
 
 Node IDs are the easy case. They're a pure function of where a broker lives, so the runtime can translate them with arithmetic and no memory. Not everything the client carries around is that obliging.
 
@@ -109,7 +111,7 @@ That doesn't make it free:
 - **Initialising everywhere is eager.** One backing cluster being unavailable blocks new producers on all the others, including ones that would never have written to it.
 - **The map needs cleaning up.** Every short-lived producer leaves a key that compaction keeps until something removes it.
 
-We haven't built this, so treat it as a direction rather than a recipe. The boss will come up again.
+We haven't built this, so treat it as a direction rather than a recipe.
 
 ### Consuming is the easy side
 
@@ -147,9 +149,6 @@ Whichever way the map is built, the router has three jobs:
 - **Produce and fetch.** Group the topics in a request by the cluster they belong to, send the pieces in parallel, and merge the replies into one.
 - **Enforce the map.** Apply the same rules to every request that names a topic, not just `Metadata`. Hiding a topic from a response isn't enough if a `Produce` can still name it.
 
-This section describes what a router for this pattern has to do, not a list of features you can switch on today.
-
-
 ## Transactions stop at the cluster boundary
 
 A transactional producer starts by sending `FindCoordinator` for its `transactional.id`, then `InitProducerId` to whichever broker the answer names. From then on that coordinator tracks the transaction, and when the producer commits it writes the commit or abort markers to the partitions involved. The coordinator, its transaction log and those markers all belong to one cluster.
@@ -166,27 +165,27 @@ It doesn't survive the first write to another cluster. The client registers each
 
 Both attempts fail for the same reason. Somewhere there has to be a moment when every cluster has promised to commit before any of them does, and Kafka's transaction protocol has no such step.
 
-## KIP-939 might add the missing step
-
-[KIP-939](https://cwiki.apache.org/confluence/display/KAFKA/KIP-939%3A+Support+Participation+in+2PC) is the obvious objection. It's accepted, it's about two-phase commit, and it has not landed in Kafka yet. It lets Kafka take part in somebody else's two-phase commit: a producer can prepare a transaction, and a prepared transaction isn't aborted by the timeout while it waits for an external coordinator to decide. That is the promise our two attempts were missing.
-
-In principle the router could be that coordinator. It would start a transaction on each backing cluster, wait for all of them to prepare, record the decision, and then tell each one to commit. The client would still believe it was talking to a single coordinator. The hard part is the middle step. Someone has to durably record the decision between "everyone prepared" and "everyone committed", and survive a crash in the gap. A router that does that needs a durable log of its own, recovery after a restart, and a way to stop two proxy instances disagreeing about the outcome. That is the consensus layer from [post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}), and the Kafka community has just spent years moving from ZooKeeper to KRaft so that nobody has to run a second consensus system alongside Kafka. Asking a proxy to bring its own would be a step backwards.
-
-That said, this is where the boss earns a second job. The decision log could live in a compacted topic on the same cluster that holds the producer ID map, with nothing new to deploy. The recovery logic is still yours to write. We haven't investigated this design in any depth, so treat it as a direction rather than a recipe.
-
-That gets harder still when the client is already a coordinator. A stream processor like Flink can run its own two-phase commit across Kafka and other systems. Put a weaving router in front of Kafka and Flink sees one participant, while the router has to act as a coordinator for the clusters behind it: two-phase commit nested inside two-phase commit. The KIP describes a flat arrangement of one coordinator and its participants, and says nothing about a participant in the middle.
-
 ## What to do today
 
 The router can at least fail loudly. It has to answer `FindCoordinator` before it knows what the transaction will touch, so it picks using something it does know, like the `transactional.id` or the authenticated principal (the [topic routing proof of concept]({% post_url 2026-05-21-topic-routing %}) used the principal). It then rejects a write that strays onto a different cluster. An error in development beats a half-committed transaction in production.
 
-Does it matter? We don't know what your business does with Kafka. Transactions are fine within a cluster, so this is not a blanket ban on using them. The question is whether any single transaction needs to touch topics that live on different clusters. If your router keeps `orders` and `inventory` together, a transaction across them should work as it always did. But transactions may be more pervasive than a first glance suggests. Kafka Streams uses them to provide exactly-once semantics, so an application that never mentions a transaction can still be running one. If that sounds like your estate, check where the topics it reads and writes live before you weave.
+Does it matter for your deployment? Transactions are fine within a cluster, so this is not a blanket ban on using them. The question is whether any single transaction needs to touch topics that live on different clusters. If your router keeps `orders` and `inventory` together, a transaction across them should work as it always did. But transactions may be more pervasive than a first glance suggests. Kafka Streams uses them to provide exactly-once semantics, so an application that never mentions a transaction can still be running one. If that sounds like your estate, check where the topics it reads and writes live before you weave.
+
+## KIP-939 might add the missing step
+
+[KIP-939](https://cwiki.apache.org/confluence/display/KAFKA/KIP-939%3A+Support+Participation+in+2PC) is the obvious objection to leaving it there. It's accepted, it's about two-phase commit, but has not landed in Kafka yet. It lets Kafka take part in somebody else's two-phase commit: a producer can prepare a transaction, and a prepared transaction isn't aborted by the timeout while it waits for an external coordinator to decide. That is the promise our two attempts were missing.
+
+In principle the router could be that coordinator. It would start a transaction on each backing cluster, wait for all of them to prepare, record the decision, and then tell each one to commit. The client would still believe it was talking to a single coordinator. The hard part is the middle step. Someone has to durably record the decision between "everyone prepared" and "everyone committed", and survive a crash in the gap. A router that does that needs a durable log of its own, recovery after a restart, and a way to stop two proxy instances disagreeing about the outcome. That is the consensus layer from [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}), and the Kafka community has just spent years moving from ZooKeeper to KRaft so that nobody has to run a second consensus system alongside Kafka. Whether asking a proxy to bring its own is acceptable depends on your constraints — it is not something we are planning to do.
+
+That said, this is where the boss earns a second job. The decision log could live in a compacted topic on the same cluster that holds the producer ID map, with nothing new to deploy. The recovery logic is still yours to write. None of this has been built or tested — treat it as a sketch of a direction, not a recipe.
+
+That gets harder still when the client is already a coordinator. A stream processor like Flink can run its own two-phase commit across Kafka and other systems. Put a weaving router in front of Kafka and Flink sees one participant, while the router has to act as a coordinator for the clusters behind it: two-phase commit nested inside two-phase commit. The KIP describes a flat arrangement of one coordinator and its participants, and says nothing about a participant in the middle.
 
 ## Egress, ingress, or does it matter?
 
-The question from the previous posts returns: should the proxy sit on the client side of the link (egress) or in front of the brokers (ingress)?
+The question from [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) returns: should the proxy sit on the client side of the link (egress) or in front of the brokers (ingress)? [Post 2]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}) covered this for connection switching; the answer for topic weaving is similar in shape but lands in a different place.
 
-The trade-off is very similar to the DR story from [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}). Co-locating the proxy with an arbitrary data cluster puts them in the same failure domain. If that cluster has an outage, the proxy instances go down with it—cutting off access to healthy topics on all the other clusters too.
+Co-locating the proxy with an arbitrary data cluster puts them in the same failure domain. If that cluster has an outage, the proxy instances go down with it—cutting off access to healthy topics on all the other clusters too.
 
 Client-side egress avoids that coupling. When an individual backing cluster goes down, the proxy stays alive. It returns partition-level errors for the affected cluster while continuing to serve produce and fetch traffic to every other cluster normally. For most topologies, keeping backing cluster failures isolated makes client side the safer default.
 
@@ -196,7 +195,7 @@ Every new producer initialisation, transaction prepare, or catalogue lookup invo
 
 If you don't use a boss, or if isolating data-cluster outages is paramount, client side is the natural home. If you do use a boss and want fast admin and init paths, co-locating with it is well worth considering.
 
-## Know when to get off the train
+## Know when to pick a different chute
 
 Every pattern in this series trades protocol simplicity for operational flexibility. Topic weaving sits near the top of that trade, which makes knowing when *not* to use it just as important as knowing how it works.
 
@@ -214,9 +213,7 @@ The boundary is clear: topic weaving works as long as each topic lives entirely 
 
 Topic weaving gives you a single logical cluster stitched from whole topics scattered across many physical backends. The client gets one bootstrap address, one cluster view, and zero awareness of the seams behind it. The proxy takes care of the routing table, broker ID collisions, and (with a boss) producer identities.
 
-Which leaves one final question. If we can weave whole topics together to build a virtual catalogue, why stop at whole topics? Kafka’s real unit of storage, throughput, and parallelism isn’t the topic—it’s the partition.
-
-In the final post of the series, we go all the way down into the protocol engine room: **partition weaving**. We’ll look at what happens when a single logical topic is assembled from physical partitions living on different clusters, under different names, and how the proxy survives rewriting partition numbers across every RPC in the Kafka protocol.
+Which leaves one final question. If we can weave whole topics together to build a virtual catalogue, why stop at whole topics? Kafka's real unit of storage, throughput, and parallelism isn't the topic—it's the partition. Next: **partition weaving**.
 
 If this is the sort of problem you're wrestling with, or if topic weaving looks like something you could use, come and talk to us on [GitHub](https://github.com/kroxylicious/kroxylicious), [Slack](https://kroxylicious.slack.com), or [Bluesky](https://bsky.app/profile/kroxylicious.io).
 
