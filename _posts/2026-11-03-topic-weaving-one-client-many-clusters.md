@@ -9,7 +9,7 @@ categories: blog kroxylicious-proxy
 tags: [ "routing" ]
 ---
 
-This is the fourth post in a series about routing in Kroxylicious. [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API and named four patterns for using it: [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}), [stream branching]({% post_url 2026-10-29-stream-branching-mind-the-gap %}), topic weaving and partition weaving. This post covers the third, topic weaving.
+This is the fourth post in a series about routing in Kroxylicious. [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API and named four patterns for using it: [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}), [stream branching]({% post_url 2026-10-29-stream-branching-mind-the-gap %}), topic weaving and partition weaving. This post covers the third, topic weaving. Like the rest of the series, it is design-level thinking rather than a description of something shipped, and we haven't tried it in practice.
 
 Kafka clusters accumulate. Teams get their own cluster for isolation, another spins up for a different region, a third appears because somebody hit a partition limit and it was quicker to provision hardware than fight for headroom. The data teams feel it first: every pipeline that crosses a cluster boundary needs its own bootstrap config, its own credentials, its own mental model of which topic lives where. A data engineer building a join across two domains has to know which physical cluster each topic lives on — not because it's relevant to their problem, but because Kafka makes it unavoidable.
 
@@ -121,15 +121,47 @@ That doesn't make it free:
 - **Initialising everywhere is eager.** One backing cluster being unavailable blocks new producers on all the others, including ones that would never have written to it.
 - **The map needs cleaning up.** Every short-lived producer leaves a key that compaction keeps until something removes it.
 
-We haven't built this, so treat it as a direction rather than a recipe.
+We haven't built this.
 
 ### Consuming is the easy side
 
 A consumer never hands a producer ID back to a broker. A `read_committed` consumer sees the one cluster's ID in the batch headers, the commit and abort markers and the aborted-transaction list of a fetch response, and all three come from the same cluster for the same partition. They already agree with each other, so the router passes them through. The one rule is for anything that rebuilds fetch batches: preserve the producer ID, epoch and control-batch flags, and keep the aborted list consistent.
 
+## Consumer groups need a coordinator too
+
+Fetching is independent per partition, so the router can send each piece of a `Fetch` to the cluster that owns it. A consumer group is the part that isn't. As a reminder, this is how the classic group protocol runs:
+
+1. `FindCoordinator` for the `group.id` returns the broker that coordinates the group.
+2. Each consumer sends `JoinGroup` to the coordinator, with its subscription as opaque bytes. The coordinator hands out member IDs and elects one member as the leader.
+3. The leader divides the partitions among the members and sends the result back in `SyncGroup`. The coordinator passes each member its share.
+4. From then on `Heartbeat` keeps the membership alive and `OffsetCommit` records progress in the coordinator's `__consumer_offsets`. Any change in membership starts a new generation and sends everyone back to step 2.
+
+All of that state lives on one broker, in one cluster.
+
+The obvious answer is to fan membership out to every cluster. Each cluster's coordinator would then run its own copy of the group, with its own member IDs, generation and leader, and decide for itself when a member has gone quiet. Nothing keeps those copies in step. If cluster B decides a member has gone quiet and A doesn't, B starts a rebalance and A doesn't, and the client's one membership is something two clusters disagree about.
+
+There's a way out, because nothing in a consumer group has to be atomic. An `OffsetCommit` reports success or failure per partition, so there is no point of no return to line up. Pick one cluster to be the boss for membership, and split the offsets by topic:
+
+- **`FindCoordinator`** for a group answers with the boss's coordinator. Every proxy instance has to give the same answer, so derive it from something the router knows, like the `group.id` or the principal. Nothing needs storing.
+- **`JoinGroup`, `SyncGroup`, `Heartbeat` and `LeaveGroup`** go to the boss and nowhere else. The coordinator treats each member's subscription as opaque bytes, and the group leader works out the assignment client-side from the merged `Metadata`. It doesn't matter that the boss has never heard of some of the topics.
+- **`OffsetCommit` and `OffsetFetch`** are split by topic, like `Produce`. The boss rejects topics it doesn't have, and the other clusters have never seen the member. So the router sends their share as standalone commits, with no member ID and generation -1, which a cluster accepts for a group with no active members. An `OffsetFetch` that asks for every topic goes to every cluster, and the replies are merged.
+
+This works because the boss is never asked about anything that isn't its own. Membership names no topics, and the offsets it receives are for topics it hosts.
+
+The single boss is cheaper than fanning out, but not free:
+
+- **The boss is a dependency.** If its cluster is down, no group can join or rebalance, even one that only reads topics elsewhere.
+- **Fencing is partial.** The boss checks the generation, but a standalone commit to another cluster isn't checked, so a zombie consumer can still commit offsets there.
+- **The group is in pieces.** Another cluster shows offsets and no members, and offsets expire on each cluster separately. Lag tooling has to ask through the proxy.
+- **The new protocol is out.** With KIP-848's `ConsumerGroupHeartbeat`, the broker computes the assignment itself, so the boss would have to resolve topics it doesn't have.
+
+If you'd rather not depend on this, keep each group's topics on one cluster, or use `assign()` and store the offsets yourself.
+
 ## Transactions stop at the cluster boundary
 
 A transactional producer starts by sending `FindCoordinator` for its `transactional.id`, then `InitProducerId` to whichever broker the answer names. From then on that coordinator tracks the transaction, and when the producer commits it writes the commit or abort markers to the partitions involved. The coordinator, its transaction log and those markers all belong to one cluster.
+
+Consumer groups got away with a single coordinator because nothing in them had to be atomic. A transaction is the opposite: its whole purpose is that several writes land together or not at all.
 
 A coordinator can only see its own cluster, so the obvious answer is to give the client one everywhere. The router fans `InitProducerId` out to every backing cluster and starts a transaction on each. As the client registers partitions and produces, the router sends each call to the cluster that owns the topic, using the producer ID and epoch that cluster issued. The client holds one producer ID and the router holds the mapping to the rest. That mapping has to survive a router restart and be visible to every proxy instance, so it needs the kind of store described [above](#where-the-map-lives). That's real work, but it's work you can do.
 
@@ -137,9 +169,9 @@ It falls over at commit. The client sends one `EndTxn` and the router has to tur
 
 A state store doesn't rescue this. It can remember that the router meant to commit cluster 2, but it can't make cluster 2 agree. Reordering the commits doesn't help either, because whichever goes first can't be undone.
 
-So stop negotiating and pick a boss again, but this time as a participant rather than a store: not a place to keep the map, but a coordinator that runs every transaction. The client's `InitProducerId`, `AddPartitionsToTxn` and `EndTxn` all go there, while the records still go to whichever cluster owns the topic. Commit is now a single decision on a single coordinator, so the atomicity problem is gone.
+So stop negotiating and do what worked for consumer groups: pick a boss, and let its coordinator run every transaction. The client's `InitProducerId`, `AddPartitionsToTxn` and `EndTxn` all go there, while the records still go to whichever cluster owns the topic. Commit is now a single decision on a single coordinator, so the atomicity problem is gone.
 
-It doesn't survive the first write to another cluster. The client registers each partition with the coordinator before it writes to it, and the boss's coordinator doesn't recognise `inventory`'s partitions, because they aren't in its cluster. It refuses them, and the transaction never gets as far as commit.
+It doesn't survive the first write to another cluster. The consumer group boss was never asked about another cluster's topics, but here the client registers each partition with the coordinator before it writes to it. The boss's coordinator doesn't recognise `inventory`'s partitions, because they aren't in its cluster. It refuses them, and the transaction never gets as far as commit.
 
 Both attempts fail for the same reason. Somewhere there has to be a moment when every cluster has promised to commit before any of them does, and Kafka's transaction protocol has no such step.
 
@@ -155,7 +187,7 @@ Does it matter for your deployment? Transactions are fine within a cluster, so t
 
 In principle the router could be that coordinator. It would start a transaction on each backing cluster, wait for all of them to prepare, record the decision, and then tell each one to commit. The client would still believe it was talking to a single coordinator. The hard part is the middle step. Someone has to durably record the decision between "everyone prepared" and "everyone committed", and survive a crash in the gap. A router that does that needs a durable log of its own, recovery after a restart, and a way to stop two proxy instances disagreeing about the outcome. That is the consensus layer from [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}), and the Kafka community has just spent years moving from ZooKeeper to KRaft so that nobody has to run a second consensus system alongside Kafka. Whether asking a proxy to bring its own is acceptable depends on your constraints — it is not something we are planning to do.
 
-That said, this is where the boss earns a second job. The decision log could live in a compacted topic on the same cluster that holds the producer ID map, with nothing new to deploy. The recovery logic is still yours to write. None of this has been built or tested — treat it as a sketch of a direction, not a recipe.
+That said, this is where the boss earns a second job. The decision log could live in a compacted topic on the same cluster that holds the producer ID map, with nothing new to deploy. The recovery logic is still yours to write.
 
 That gets harder still when the client is already a coordinator. A stream processor like Flink can run its own two-phase commit across Kafka and other systems. Put a weaving router in front of Kafka and Flink sees one participant, while the router has to act as a coordinator for the clusters behind it: two-phase commit nested inside two-phase commit. The KIP describes a flat arrangement of one coordinator and its participants, and says nothing about a participant in the middle.
 
@@ -171,12 +203,13 @@ None of the boss cluster roles are tested. They make sense in principle, but the
 | --- | --- | --- |
 | Topic creation (`CreateTopics`) | Default cluster for new topics (or catalogue store) | Works, with the hotchpotch caveat |
 | Producer ID mapping | Registry in a compacted topic | Works |
-| Transactions | The boss's coordinator runs every transaction | Fails (participant) |
+| Consumer groups | The boss's coordinator runs membership; offsets are split by topic | Works in principle (classic protocol only) |
+| Transactions | The boss's coordinator runs every transaction | Fails (remote content) |
 | Distributed commit (KIP-939) | Decision log for two-phase commit | Feasible, untested |
 
-The test for whether a boss works is whether it acts as a **store** or as a **participant**.
+The test for whether a boss works is whether the content it is asked to hold or decide is **local** to its cluster or **remote**.
 
-When the boss is a store, it holds proxy bookkeeping in internal topics. The proxy writes its state there and reads it back; the brokers on the boss are just durable storage for bytes, and the proxy enforces the semantics. When the boss is a participant, client traffic lands on it directly. Any write to the boss cluster makes it a participant. That works for `CreateTopics` where the boss hosts the newly created topic, but it fails when the boss is expected to participate on behalf of other clusters. A transaction coordinator on the boss can track and commit writes to its own partitions, but it rejects writes to partitions on other clusters because they do not exist in its metadata.
+Local content is anything that lives on the boss itself. Proxy bookkeeping in internal topics is the clearest case: the proxy writes its state there and reads it back, and the brokers on the boss are just durable storage for bytes. A newly created topic that the boss hosts is local too, and so is consumer group membership, because it names no topics. Remote content is anything the boss would have to answer for on behalf of another cluster. A transaction coordinator on the boss can track and commit writes to its own partitions, but it rejects writes to partitions on other clusters because they do not exist in its metadata.
 
 Where that boss cluster lives is a separate choice:
 
