@@ -196,6 +196,20 @@ Every new producer initialisation, transaction prepare, or catalogue lookup invo
 
 If you don't use a boss, or if isolating data-cluster outages is paramount, client side is the natural home. If you do use a boss and want fast admin and init paths, co-locating with it is well worth considering.
 
+## Know when to get off the train
+
+Every pattern in this series trades protocol simplicity for operational flexibility. Topic weaving sits near the top of that trade, which makes knowing when *not* to use it just as important as knowing how it works.
+
+If your problem is moving a whole workload, use [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}). A blue/green cutover, a cluster migration, or insulating a legacy application from infrastructure churn only needs the router to throw points at connection time. It is completely stateless, involves zero metadata fabrication or PID rewriting, and adds no moving parts. If all the mail is going to the same city, you don't need a sorting office.
+
+If your problem is data locality or disaster recovery, use **replication**. MirrorMaker 2, KIP-1279 Cluster Mirroring, or your vendor's replication engine copy the committed log asynchronously after the fact. Topic weaving lets a client in London reach a topic in Tokyo without configuring a second bootstrap address, but the network packets still cross the ocean on every fetch. If you need local read latency or an independent replica that survives a regional outage, replicate the bytes. Weaving provides unified access; replication provides local copies.
+
+If your problem is tapping an auxiliary stream, use [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}). Forking a produce stream to feed a staging cluster, an audit topic, or a PII-scrubbed shadow works best when the branch is best-effort and can tolerate the odd gap or duplicate.
+
+**Topic weaving** is the right choice when topics have distinct, legitimate homes across multiple clusters—by team, by tenant, or by compliance boundary—and you want clients to interact with them as a single coherent estate. It eliminates multi-client boilerplate in application code and hides physical cluster sprawl behind a clean virtual catalogue.
+
+The boundary is clear: topic weaving works as long as each topic lives entirely on one backing cluster. If your producers need atomic cross-topic transactions across cluster boundaries, no proxy can fix that; those topics must share a physical cluster. And if even a single topic cannot live on one cluster—if you need its partitions split across different physical environments—you have reached the edge of topic weaving.
+
 
 ## TODO
 
@@ -213,7 +227,7 @@ If you don't use a boss, or if isolating data-cluster outages is paramount, clie
 - [x] KIP-939 and why it isn't magic
   - Link/summarise the Gemini doc before quoting
 - [x] Proxy placement: run it in the client's network/trust zone, not co-located with any single cluster, so a cluster failure doesn't take the proxy with it
-- [ ] When to use weaving vs replication vs connection switching
+- [x] When to use weaving vs replication vs connection switching
 - [ ] Closing: what's next in the series
 
 ---
