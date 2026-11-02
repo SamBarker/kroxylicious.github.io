@@ -9,7 +9,7 @@ categories: blog kroxylicious-proxy
 tags: [ "routing" ]
 ---
 
-This is the fourth post in a series about routing in Kroxylicious. [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API and named four patterns for using it: [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}), [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}), topic weaving and partition weaving. This post covers the third, topic weaving.
+This is the fourth post in a series about routing in Kroxylicious. [Post 1]({% post_url 2026-10-12-these-are-not-the-brokers-you-are-connecting-to %}) introduced the Routing API and named four patterns for using it: [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}), [stream branching]({% post_url 2026-10-29-stream-branching-mind-the-gap %}), topic weaving and partition weaving. This post covers the third, topic weaving.
 
 Kafka clusters accumulate. Teams get their own cluster for isolation, another spins up for a different region, a third appears because somebody hit a partition limit and it was quicker to provision hardware than fight for headroom. The data teams feel it first: every pipeline that crosses a cluster boundary needs its own bootstrap config, its own credentials, its own mental model of which topic lives where. A data engineer building a join across two domains has to know which physical cluster each topic lives on — not because it's relevant to their problem, but because Kafka makes it unavoidable.
 
@@ -68,7 +68,7 @@ Everything so far has been about reading the map, and reading is aggregation. Ea
 - **A default cluster.** Simple and predictable. But one cluster risks becoming a hotchpotch of disjointed topics, and nothing about where the data ought to live gets a say.
 - **A rule on the name.** `london_orders` goes to London. No state, and the map follows for free. But the name is the placement, so moving a topic means renaming it, and a name that doesn't fit the convention needs somewhere to go.
 - **A catalogue.** Placement is decided centrally and names can be anything. But a create is now two steps, update the catalogue and create the topic, and either can fail and leave the other behind.
-- **Every cluster.** The name exists everywhere, which is convenient for reads. It doesn't share any data, since each cluster still holds its own. But the create is now a dual write, the problem from [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}). If it works on A and fails on B, the topic half exists, and the router has to decide what to tell the client.
+- **Every cluster.** The name exists everywhere, which is convenient for reads. It doesn't share any data, since each cluster still holds its own. But the create is now a dual write, the problem from [stream branching]({% post_url 2026-10-29-stream-branching-mind-the-gap %}). If it works on A and fails on B, the topic half exists, and the router has to decide what to tell the client.
 - **Refuse.** The platform team owns the topology and nothing surprising appears. But anything that creates topics for itself, Kafka Streams being the usual suspect, stops working.
 
 All of these are legitimate. Which is right depends on who owns the topics and how much you trust the clients, so it's the router's call and the proxy has no opinion.
@@ -203,7 +203,7 @@ If your problem is moving a whole workload, use [connection switching]({% post_u
 
 If your problem is data locality or disaster recovery, use **replication**. MirrorMaker 2, KIP-1279 Cluster Mirroring, or your vendor's replication engine copy the committed log asynchronously after the fact. Topic weaving lets a client in London reach a topic in Tokyo without configuring a second bootstrap address, but the network packets still cross the ocean on every fetch. If you need local read latency or an independent replica that survives a regional outage, replicate the bytes. Weaving provides unified access; replication provides local copies.
 
-If your problem is tapping an auxiliary stream, use [stream branching]({% post_url 2026-10-26-stream-branching-mind-the-gap %}). Forking a produce stream to feed a staging cluster, an audit topic, or a PII-scrubbed shadow works best when the branch is best-effort and can tolerate the odd gap or duplicate.
+If your problem is tapping an auxiliary stream, use [stream branching]({% post_url 2026-10-29-stream-branching-mind-the-gap %}). Forking a produce stream to feed a staging cluster, an audit topic, or a PII-scrubbed shadow works best when the branch is best-effort and can tolerate the odd gap or duplicate.
 
 **Topic weaving** is the right choice when topics have distinct, legitimate homes across multiple clusters—by team, by tenant, or by compliance boundary—and you want clients to interact with them as a single coherent estate. It eliminates multi-client boilerplate in application code and hides physical cluster sprawl behind a clean virtual catalogue.
 
