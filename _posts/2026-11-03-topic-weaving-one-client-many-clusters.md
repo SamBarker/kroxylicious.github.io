@@ -182,6 +182,20 @@ The router can at least fail loudly. It has to answer `FindCoordinator` before i
 
 Does it matter? We don't know what your business does with Kafka. Transactions are fine within a cluster, so this is not a blanket ban on using them. The question is whether any single transaction needs to touch topics that live on different clusters. If your router keeps `orders` and `inventory` together, a transaction across them should work as it always did. But transactions may be more pervasive than a first glance suggests. Kafka Streams uses them to provide exactly-once semantics, so an application that never mentions a transaction can still be running one. If that sounds like your estate, check where the topics it reads and writes live before you weave.
 
+## Egress, ingress, or does it matter?
+
+The question from the previous posts returns: should the proxy sit on the client side of the link (egress) or in front of the brokers (ingress)?
+
+The trade-off is very similar to the DR story from [connection switching]({% post_url 2026-10-19-connection-switching-identity-without-commitment %}). Co-locating the proxy with an arbitrary data cluster puts them in the same failure domain. If that cluster has an outage, the proxy instances go down with it—cutting off access to healthy topics on all the other clusters too.
+
+Client-side egress avoids that coupling. When an individual backing cluster goes down, the proxy stays alive. It returns partition-level errors for the affected cluster while continuing to serve produce and fetch traffic to every other cluster normally. For most topologies, keeping backing cluster failures isolated makes client side the safer default.
+
+That doesn't make client side categorically better. If you adopt the boss pattern, co-locating the proxy fleet with the boss cluster has a compelling advantage: **latency**.
+
+Every new producer initialisation, transaction prepare, or catalogue lookup involves the boss. Putting the proxy next to the boss turns those round-trips into local network hops rather than cross-link calls. You accept that the proxy shares a failure domain with the boss—but if the boss is down, those control operations were going to stall anyway.
+
+If you don't use a boss, or if isolating data-cluster outages is paramount, client side is the natural home. If you do use a boss and want fast admin and init paths, co-locating with it is well worth considering.
+
 
 ## TODO
 
@@ -198,7 +212,7 @@ Does it matter? We don't know what your business does with Kafka. Transactions a
   - Reference Post 3's transactions section; explain how weaving makes it worse
 - [x] KIP-939 and why it isn't magic
   - Link/summarise the Gemini doc before quoting
-- [ ] Proxy placement: run it in the client's network/trust zone, not co-located with any single cluster, so a cluster failure doesn't take the proxy with it
+- [x] Proxy placement: run it in the client's network/trust zone, not co-located with any single cluster, so a cluster failure doesn't take the proxy with it
 - [ ] When to use weaving vs replication vs connection switching
 - [ ] Closing: what's next in the series
 
