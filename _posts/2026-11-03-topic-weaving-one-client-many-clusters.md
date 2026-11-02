@@ -210,6 +210,16 @@ If your problem is tapping an auxiliary stream, use [stream branching]({% post_u
 
 The boundary is clear: topic weaving works as long as each topic lives entirely on one backing cluster. If your producers need atomic cross-topic transactions across cluster boundaries, no proxy can fix that; those topics must share a physical cluster. And if even a single topic cannot live on one cluster—if you need its partitions split across different physical environments—you have reached the edge of topic weaving.
 
+---
+
+Topic weaving gives you a single logical cluster stitched from whole topics scattered across many physical backends. The client gets one bootstrap address, one cluster view, and zero awareness of the seams behind it. The proxy takes care of the routing table, broker ID collisions, and (with a boss) producer identities.
+
+Which leaves one final question. If we can weave whole topics together to build a virtual catalogue, why stop at whole topics? Kafka’s real unit of storage, throughput, and parallelism isn’t the topic—it’s the partition.
+
+In the final post of the series, we go all the way down into the protocol engine room: **partition weaving**. We’ll look at what happens when a single logical topic is assembled from physical partitions living on different clusters, under different names, and how the proxy survives rewriting partition numbers across every RPC in the Kafka protocol.
+
+If you’re weaving topics already, or exploring how to manage multi-cluster topologies, find us on [GitHub](https://github.com/kroxylicious/kroxylicious), [Slack](https://kroxylicious.slack.com), or [Bluesky](https://bsky.app/profile/kroxylicious.io).
+
 
 ## TODO
 
@@ -228,7 +238,7 @@ The boundary is clear: topic weaving works as long as each topic lives entirely 
   - Link/summarise the Gemini doc before quoting
 - [x] Proxy placement: run it in the client's network/trust zone, not co-located with any single cluster, so a cluster failure doesn't take the proxy with it
 - [x] When to use weaving vs replication vs connection switching
-- [ ] Closing: what's next in the series
+- [x] Closing: what's next in the series
 
 ---
 
