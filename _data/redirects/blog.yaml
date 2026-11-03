@@ -23,10 +23,10 @@ mappings:
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/26/stream-branching-mind-the-gap.html
   - name: tw
     subgroup: routing
-    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/12/these-are-not-the-brokers-you-are-connecting-to.html
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/11/02/topic-weaving-one-client-many-clusters.html
   - name: topic-weaving
     subgroup: routing
-    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/12/these-are-not-the-brokers-you-are-connecting-to.html
+    absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/11/02/topic-weaving-one-client-many-clusters.html
   - name: pw
     subgroup: routing
     absoluteTarget: https://kroxylicious.io/blog/kroxylicious-proxy/2026/10/12/these-are-not-the-brokers-you-are-connecting-to.html
